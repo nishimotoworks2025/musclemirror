@@ -24,7 +24,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
   bool _obscureConfirm = true;
   String? _errorMessage;
   String? _successMessage;
-  String _registeredEmail = '';    // 表示用
+  String _registeredEmail = ''; // 表示用
   String _registeredUsername = ''; // Cognito操作用（生成されたusername）
 
   @override
@@ -104,7 +104,9 @@ class _RegisterScreenState extends State<RegisterScreen> {
       _successMessage = null;
     });
 
-    final result = await _authService.resendConfirmationCode(_registeredUsername);
+    final result = await _authService.resendConfirmationCode(
+      _registeredUsername,
+    );
 
     if (!mounted) return;
     setState(() => _isLoading = false);
@@ -155,10 +157,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
             alignment: Alignment.center,
             decoration: BoxDecoration(
               gradient: LinearGradient(
-                colors: [
-                  AppTheme.brandBlue,
-                  AppTheme.brandBlue.withAlpha(180),
-                ],
+                colors: [AppTheme.brandBlue, AppTheme.brandBlue.withAlpha(180)],
                 begin: Alignment.topLeft,
                 end: Alignment.bottomRight,
               ),
@@ -171,7 +170,11 @@ class _RegisterScreenState extends State<RegisterScreen> {
                 ),
               ],
             ),
-            child: const Icon(Icons.person_add_alt_1, size: 40, color: Colors.white),
+            child: const Icon(
+              Icons.person_add_alt_1,
+              size: 40,
+              color: Colors.white,
+            ),
           ),
 
           Text(
@@ -189,87 +192,117 @@ class _RegisterScreenState extends State<RegisterScreen> {
             ),
             textAlign: TextAlign.center,
           ),
-          const SizedBox(height: 32),
+          const SizedBox(height: 24),
 
           // Email
           AutofillGroup(
             child: Column(
               children: [
-          TextFormField(
-            controller: _emailController,
-            keyboardType: TextInputType.emailAddress,
-            textInputAction: TextInputAction.next,
-            autofillHints: const [AutofillHints.email],
-            decoration: InputDecoration(
-              labelText: 'メールアドレス',
-              hintText: 'example@email.com',
-              prefixIcon: const Icon(Icons.email_outlined),
-              border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-              filled: true,
-              fillColor: isDark ? Colors.white.withAlpha(13) : Colors.black.withAlpha(8),
-            ),
-            validator: (value) {
-              if (value == null || value.isEmpty) return 'メールアドレスを入力してください';
-              if (!value.contains('@')) return '有効なメールアドレスを入力してください';
-              return null;
-            },
-          ),
-          const SizedBox(height: 16),
+                TextFormField(
+                  controller: _emailController,
+                  keyboardType: TextInputType.emailAddress,
+                  textInputAction: TextInputAction.next,
+                  autofillHints: const [AutofillHints.email],
+                  decoration: InputDecoration(
+                    labelText: 'メールアドレス',
+                    hintText: 'example@email.com',
+                    prefixIcon: const Icon(Icons.email_outlined),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    filled: true,
+                    fillColor: isDark
+                        ? Colors.white.withAlpha(13)
+                        : Colors.black.withAlpha(8),
+                  ),
+                  validator: (value) {
+                    if (value == null || value.isEmpty) {
+                      return 'メールアドレスを入力してください';
+                    }
+                    if (!value.contains('@')) {
+                      return '有効なメールアドレスを入力してください';
+                    }
+                    return null;
+                  },
+                ),
+                const SizedBox(height: 16),
 
-          // Password
-          TextFormField(
-            controller: _passwordController,
-            obscureText: _obscurePassword,
-            textInputAction: TextInputAction.next,
-            autofillHints: const [AutofillHints.newPassword],
-            decoration: InputDecoration(
-              labelText: 'パスワード',
-              hintText: '8文字以上（大文字・小文字・数字を含む）',
-              prefixIcon: const Icon(Icons.lock_outlined),
-              suffixIcon: IconButton(
-                icon: Icon(_obscurePassword
-                    ? Icons.visibility_outlined
-                    : Icons.visibility_off_outlined),
-                onPressed: () => setState(() => _obscurePassword = !_obscurePassword),
-              ),
-              border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-              filled: true,
-              fillColor: isDark ? Colors.white.withAlpha(13) : Colors.black.withAlpha(8),
-            ),
-            validator: (value) {
-              if (value == null || value.isEmpty) return 'パスワードを入力してください';
-              if (value.length < 8) return 'パスワードは8文字以上必要です';
-              return null;
-            },
-          ),
-          const SizedBox(height: 16),
+                // Password
+                TextFormField(
+                  controller: _passwordController,
+                  obscureText: _obscurePassword,
+                  textInputAction: TextInputAction.next,
+                  autofillHints: const [AutofillHints.newPassword],
+                  decoration: InputDecoration(
+                    labelText: 'パスワード',
+                    hintText: '8文字以上（大文字・小文字・数字を含む）',
+                    prefixIcon: const Icon(Icons.lock_outlined),
+                    suffixIcon: IconButton(
+                      icon: Icon(
+                        _obscurePassword
+                            ? Icons.visibility_outlined
+                            : Icons.visibility_off_outlined,
+                      ),
+                      onPressed: () =>
+                          setState(() => _obscurePassword = !_obscurePassword),
+                    ),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    filled: true,
+                    fillColor: isDark
+                        ? Colors.white.withAlpha(13)
+                        : Colors.black.withAlpha(8),
+                  ),
+                  validator: (value) {
+                    if (value == null || value.isEmpty) {
+                      return 'パスワードを入力してください';
+                    }
+                    if (value.length < 8) {
+                      return 'パスワードは8文字以上必要です';
+                    }
+                    return null;
+                  },
+                ),
+                const SizedBox(height: 16),
 
-          // Confirm Password
-          TextFormField(
-            controller: _confirmPasswordController,
-            obscureText: _obscureConfirm,
-            textInputAction: TextInputAction.done,
-            autofillHints: const [AutofillHints.newPassword],
-            onFieldSubmitted: (_) => _handleRegister(),
-            decoration: InputDecoration(
-              labelText: 'パスワード（確認）',
-              prefixIcon: const Icon(Icons.lock_outlined),
-              suffixIcon: IconButton(
-                icon: Icon(_obscureConfirm
-                    ? Icons.visibility_outlined
-                    : Icons.visibility_off_outlined),
-                onPressed: () => setState(() => _obscureConfirm = !_obscureConfirm),
-              ),
-              border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-              filled: true,
-              fillColor: isDark ? Colors.white.withAlpha(13) : Colors.black.withAlpha(8),
-            ),
-            validator: (value) {
-              if (value == null || value.isEmpty) return 'パスワード（確認）を入力してください';
-              if (value != _passwordController.text) return 'パスワードが一致しません';
-              return null;
-            },
-          ),
+                // Confirm Password
+                TextFormField(
+                  controller: _confirmPasswordController,
+                  obscureText: _obscureConfirm,
+                  textInputAction: TextInputAction.done,
+                  autofillHints: const [AutofillHints.newPassword],
+                  onFieldSubmitted: (_) => _handleRegister(),
+                  decoration: InputDecoration(
+                    labelText: 'パスワード（確認）',
+                    prefixIcon: const Icon(Icons.lock_outlined),
+                    suffixIcon: IconButton(
+                      icon: Icon(
+                        _obscureConfirm
+                            ? Icons.visibility_outlined
+                            : Icons.visibility_off_outlined,
+                      ),
+                      onPressed: () =>
+                          setState(() => _obscureConfirm = !_obscureConfirm),
+                    ),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    filled: true,
+                    fillColor: isDark
+                        ? Colors.white.withAlpha(13)
+                        : Colors.black.withAlpha(8),
+                  ),
+                  validator: (value) {
+                    if (value == null || value.isEmpty) {
+                      return 'パスワード（確認）を入力してください';
+                    }
+                    if (value != _passwordController.text) {
+                      return 'パスワードが一致しません';
+                    }
+                    return null;
+                  },
+                ),
               ],
             ),
           ),
@@ -287,17 +320,25 @@ class _RegisterScreenState extends State<RegisterScreen> {
             child: FilledButton(
               onPressed: _isLoading ? null : _handleRegister,
               style: FilledButton.styleFrom(
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
               ),
               child: _isLoading
                   ? const SizedBox(
                       width: 24,
                       height: 24,
-                      child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: Colors.white,
+                      ),
                     )
                   : const Text(
                       '登録する',
-                      style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
             ),
           ),
@@ -332,12 +373,18 @@ class _RegisterScreenState extends State<RegisterScreen> {
             color: Colors.green.withAlpha(30),
             borderRadius: BorderRadius.circular(20),
           ),
-          child: const Icon(Icons.mark_email_read_outlined, size: 40, color: Colors.green),
+          child: const Icon(
+            Icons.mark_email_read_outlined,
+            size: 40,
+            color: Colors.green,
+          ),
         ),
 
         Text(
           'メールを確認してください',
-          style: theme.textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.bold),
+          style: theme.textTheme.headlineSmall?.copyWith(
+            fontWeight: FontWeight.bold,
+          ),
           textAlign: TextAlign.center,
         ),
         const SizedBox(height: 12),
@@ -356,7 +403,11 @@ class _RegisterScreenState extends State<RegisterScreen> {
           keyboardType: TextInputType.number,
           textAlign: TextAlign.center,
           maxLength: 6,
-          style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold, letterSpacing: 8),
+          style: const TextStyle(
+            fontSize: 24,
+            fontWeight: FontWeight.bold,
+            letterSpacing: 8,
+          ),
           decoration: InputDecoration(
             labelText: '確認コード',
             hintText: '123456',
@@ -364,7 +415,9 @@ class _RegisterScreenState extends State<RegisterScreen> {
             prefixIcon: const Icon(Icons.pin_outlined),
             border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
             filled: true,
-            fillColor: isDark ? Colors.white.withAlpha(13) : Colors.black.withAlpha(8),
+            fillColor: isDark
+                ? Colors.white.withAlpha(13)
+                : Colors.black.withAlpha(8),
           ),
         ),
         const SizedBox(height: 16),
@@ -385,13 +438,18 @@ class _RegisterScreenState extends State<RegisterScreen> {
           child: FilledButton(
             onPressed: _isLoading ? null : _handleConfirm,
             style: FilledButton.styleFrom(
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
             ),
             child: _isLoading
                 ? const SizedBox(
                     width: 24,
                     height: 24,
-                    child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: Colors.white,
+                    ),
                   )
                 : const Text(
                     '確認する',
@@ -418,7 +476,9 @@ class _RegisterScreenState extends State<RegisterScreen> {
             }),
             child: Text(
               '← 登録情報を変更する',
-              style: TextStyle(color: theme.textTheme.bodySmall?.color?.withAlpha(180)),
+              style: TextStyle(
+                color: theme.textTheme.bodySmall?.color?.withAlpha(180),
+              ),
             ),
           ),
         ),

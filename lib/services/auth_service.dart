@@ -434,7 +434,9 @@ class AuthService {
     if (message.contains('InvalidParameterException') ||
         message.contains('Invalid parameter') ||
         message.contains('format')) {
-      return '入力形式が正しくありません。メールアドレスとパスワードを確認してください';
+      return message.isEmpty
+          ? '入力形式が正しくありません。メールアドレスとパスワードを確認してください'
+          : '入力形式エラー: $message';
     }
     if (message.contains('CodeMismatchException')) {
       return '確認コードが正しくありません';

@@ -278,6 +278,27 @@ class _LoginScreenState extends State<LoginScreen> {
                             ),
                           ),
                         ),
+                        Align(
+                          alignment: Alignment.centerRight,
+                          child: TextButton(
+                            onPressed: () {
+                              Navigator.of(context).push(
+                                MaterialPageRoute(
+                                  builder: (_) => const RegisterScreen(),
+                                ),
+                              );
+                            },
+                            style: TextButton.styleFrom(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 4,
+                              ),
+                            ),
+                            child: const Text(
+                              '新規作成',
+                              style: TextStyle(fontSize: 13),
+                            ),
+                          ),
+                        ),
 
                         const SizedBox(height: 16),
 
@@ -420,25 +441,6 @@ class _LoginScreenState extends State<LoginScreen> {
                 ),
 
                 const SizedBox(height: 16),
-
-                // Register Link
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Text('アカウントをお持ちでない方は', style: theme.textTheme.bodySmall),
-                    TextButton(
-                      onPressed: () {
-                        Navigator.of(context).push(
-                          MaterialPageRoute(
-                            builder: (_) => const RegisterScreen(),
-                          ),
-                        );
-                      },
-                      child: const Text('新規登録'),
-                    ),
-                  ],
-                ),
-
                 // Guest Mode
                 const SizedBox(height: 8),
                 OutlinedButton(
