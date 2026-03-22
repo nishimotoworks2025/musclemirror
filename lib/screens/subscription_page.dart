@@ -16,10 +16,22 @@ class _SubscriptionPageState extends State<SubscriptionPage> {
   bool _isLoading = false;
   String? _errorMessage;
 
+  void _refreshEntitlementView() {
+    if (!mounted) return;
+    setState(() {});
+  }
+
   @override
   void initState() {
     super.initState();
+    _billingService.isProNotifier.addListener(_refreshEntitlementView);
     _initializeBilling();
+  }
+
+  @override
+  void dispose() {
+    _billingService.isProNotifier.removeListener(_refreshEntitlementView);
+    super.dispose();
   }
 
   Future<void> _initializeBilling({bool forceReload = false}) async {
@@ -28,12 +40,10 @@ class _SubscriptionPageState extends State<SubscriptionPage> {
     setState(() => _isLoading = false);
   }
 
-  Future<void> _purchaseSubscription(ProductDetails product) async {
-    await _doPurchase(() => _billingService.purchaseBasePlan(product));
-  }
-
   Future<void> _purchaseTicket() async {
-    await _doPurchase(() => _billingService.purchaseConsumable(ProductIds.ticket));
+    await _doPurchase(
+      () => _billingService.purchaseConsumable(ProductIds.ticket),
+    );
   }
 
   Future<void> _doPurchase(Future<bool> Function() purchaseFn) async {
@@ -70,43 +80,92 @@ class _SubscriptionPageState extends State<SubscriptionPage> {
     }
   }
 
-  // Helfer for Google Play Base Plans
-  ProductDetails? _getAndroidBasePlan(String productId, String basePlanId) {
-    try {
-      for (final p in _billingService.products) {
-        if (p.id == productId && p is GooglePlayProductDetails) {
-          final subscriptionOfferDetails = p.productDetails.subscriptionOfferDetails;
-          if (subscriptionOfferDetails != null) {
-            final hasBasePlan = subscriptionOfferDetails.any(
-                (offer) => offer.basePlanId == basePlanId);
-            if (hasBasePlan) return p;
-          }
+  // Helper for Google Play Base Plans
+  ({String? offerToken, String? price}) _getPlanInfo(
+    ProductDetails? product,
+    String basePlanId,
+  ) {
+    if (product == null) return (offerToken: null, price: null);
+
+    if (product is GooglePlayProductDetails) {
+      final subscriptionOfferDetails =
+          product.productDetails.subscriptionOfferDetails;
+      if (subscriptionOfferDetails != null &&
+          subscriptionOfferDetails.isNotEmpty) {
+        debugPrint(
+          '[SubscriptionPage] Product ${product.id} has ${subscriptionOfferDetails.length} offers.',
+        );
+
+        // 1. Try to find the exact base plan
+        try {
+          final offer = subscriptionOfferDetails.firstWhere(
+            (offer) => offer.basePlanId == basePlanId,
+          );
+          final price = offer.pricingPhases.last.formattedPrice;
+          debugPrint(
+            '[SubscriptionPage] Found exact base plan $basePlanId: $price',
+          );
+          return (offerToken: offer.offerIdToken, price: price);
+        } catch (_) {
+          debugPrint(
+            '[SubscriptionPage] Base plan $basePlanId not found for ${product.id}. Fallback to first offer.',
+          );
         }
+
+        // 2. Fallback to the first available offer if specific one not found
+        final firstOffer = subscriptionOfferDetails.first;
+        final price = firstOffer.pricingPhases.last.formattedPrice;
+        debugPrint(
+          '[SubscriptionPage] Fallback offer: ${firstOffer.basePlanId}, price: $price',
+        );
+        return (offerToken: firstOffer.offerIdToken, price: price);
       }
-      return null;
-    } catch (_) {
-      return null;
     }
+    return (offerToken: null, price: product.price);
   }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    
+
     // Fallback: iOS or old Android logic (Gets first ProductDetails)
-    ProductDetails? proProduct = _getProduct(ProductIds.pro);
-    
-    // Identify specific base plans for Android 5+
-    ProductDetails? monthlyProProduct = _getAndroidBasePlan(ProductIds.pro, 'musclemirror-month-v2') ?? proProduct;
-    ProductDetails? yearlyProProduct = _getAndroidBasePlan(ProductIds.pro, 'musclemirror-year') ?? proProduct;
-    
+    // Identify specific plans
+    final proProduct = _getProduct(ProductIds.pro);
+
+    // Try specialized standalone IDs first (Android/iOS)
+    final ProductDetails? yearlyStandalone = _getProduct(ProductIds.proYearly);
+    final ProductDetails? monthlyStandalone = _getProduct(
+      ProductIds.proMonthlyV2,
+    );
+
+    // Fallback: If not found as standalone, check if they are base plans of the old 'pro' ID (Android 5+)
+    final yearlyInfo = _getPlanInfo(
+      yearlyStandalone ?? proProduct,
+      'musclemirror-year',
+    );
+    final monthlyInfo = _getPlanInfo(
+      monthlyStandalone ?? proProduct,
+      'musclemirror-month-v2',
+    );
+
+    final yearlyProProduct = yearlyStandalone ?? proProduct;
+    final monthlyProProduct = monthlyStandalone ?? proProduct;
+
     final ticketProduct = _getProduct(ProductIds.ticket);
     final hasAnyProduct = proProduct != null || ticketProduct != null;
 
+    if (hasAnyProduct) {
+      debugPrint(
+        '[SubscriptionPage] Products found: '
+        'pro=${proProduct?.id}, '
+        'yearly=${yearlyStandalone?.id}, '
+        'monthly=${monthlyStandalone?.id}, '
+        'ticket=${ticketProduct?.id}',
+      );
+    }
+
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('プラン・チケット購入'),
-      ),
+      appBar: AppBar(title: const Text('プラン・チケット購入')),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(24),
         child: Column(
@@ -182,7 +241,7 @@ class _SubscriptionPageState extends State<SubscriptionPage> {
                 ],
               ),
             ),
-            
+
             const SizedBox(height: 32),
 
             // Pro Features
@@ -227,7 +286,11 @@ class _SubscriptionPageState extends State<SubscriptionPage> {
                 ),
                 child: Row(
                   children: [
-                    const Icon(Icons.error_outline, color: Colors.red, size: 20),
+                    const Icon(
+                      Icons.error_outline,
+                      color: Colors.red,
+                      size: 20,
+                    ),
                     const SizedBox(width: 8),
                     Expanded(
                       child: Text(
@@ -267,7 +330,9 @@ class _SubscriptionPageState extends State<SubscriptionPage> {
               Container(
                 padding: const EdgeInsets.all(24),
                 decoration: BoxDecoration(
-                  color: theme.colorScheme.surfaceVariant.withAlpha(100),
+                  color: theme.colorScheme.surfaceContainerHighest.withAlpha(
+                    100,
+                  ),
                   borderRadius: BorderRadius.circular(16),
                 ),
                 child: Column(
@@ -287,8 +352,10 @@ class _SubscriptionPageState extends State<SubscriptionPage> {
                         borderRadius: BorderRadius.circular(8),
                       ),
                       child: Text(
-                        'Debug Info:\n${_billingService.debugInfo}'
-                        '\nNot Found IDs: ${_billingService.notFoundIDs}',
+                        'Store Debug Info:\n'
+                        'Queried: ${ProductIds.all.join(", ")}\n'
+                        'Found (${_billingService.products.length}): ${_billingService.products.map((p) => "${p.id}(${p.price})").join(", ")}\n'
+                        'Not Found: ${_billingService.notFoundIDs.join(", ")}',
                         style: const TextStyle(
                           fontSize: 11,
                           fontFamily: 'monospace',
@@ -306,35 +373,108 @@ class _SubscriptionPageState extends State<SubscriptionPage> {
                 ),
               )
             else ...[
+              // Debug Info (Found products)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 16),
+                child: ExpansionTile(
+                  title: const Text(
+                    'デバッグ情報 (ストア接続状態)',
+                    style: TextStyle(fontSize: 12),
+                  ),
+                  dense: true,
+                  children: [
+                    Container(
+                      width: double.infinity,
+                      margin: const EdgeInsets.symmetric(horizontal: 16),
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Colors.black.withAlpha(10),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Text(
+                        'Found IDs: ${_billingService.products.map((p) => p.id).join(", ")}\n'
+                        'Not Found: ${_billingService.notFoundIDs.isEmpty ? "none" : _billingService.notFoundIDs.join(", ")}',
+                        style: const TextStyle(
+                          fontSize: 10,
+                          fontFamily: 'monospace',
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
               // 1. Monthly Pro Subscription
               if (monthlyProProduct != null) ...[
-                _SubscriptionCard(
-                  title: '月額プラン',
-                  price: monthlyProProduct.price,
-                  description: '毎月自動更新・すべての機能が使い放題',
-                  isLoading: _isLoading,
-                  onTap: () => _purchaseSubscription(monthlyProProduct),
+                Builder(
+                  builder: (context) {
+                    final isOwned =
+                        _billingService.hasActiveSubscription &&
+                        _billingService.meStatus?.planTier == 'pro' &&
+                        _billingService.meStatus?.effectivePlan !=
+                            ProductIds.proYearly;
+
+                    return _SubscriptionCard(
+                      title: '月額プラン',
+                      price: monthlyInfo.price ?? monthlyProProduct.price,
+                      description: '毎月自動更新・すべての機能が使い放題',
+                      isLoading: _isLoading,
+                      isOwned: isOwned,
+                      onTap: isOwned
+                          ? null
+                          : () => _doPurchase(
+                              () => _billingService.purchaseBasePlan(
+                                monthlyProProduct,
+                                offerToken: monthlyInfo.offerToken,
+                              ),
+                            ),
+                    );
+                  },
                 ),
-                
+
                 const SizedBox(height: 12),
 
                 // 2. Yearly Pro Subscription (recommended)
                 Stack(
                   clipBehavior: Clip.none,
                   children: [
-                    _SubscriptionCard(
-                      title: '年額プラン',
-                      price: '¥4,800', // Override the price string from the store to ensure it displays correctly
-                      description: '毎年自動更新（2ヶ月分お得！）',
-                      isPopular: true,
-                      isLoading: _isLoading,
-                      onTap: yearlyProProduct != null ? () => _purchaseSubscription(yearlyProProduct) : null,
+                    Builder(
+                      builder: (context) {
+                        final isOwned =
+                            _billingService.hasActiveSubscription &&
+                            _billingService.meStatus?.effectivePlan ==
+                                ProductIds.proYearly;
+
+                        return _SubscriptionCard(
+                          title: '年額プラン',
+                          price:
+                              yearlyInfo.price ??
+                              yearlyProProduct?.price ??
+                              '¥4,800',
+                          description: '毎年自動更新（2ヶ月分お得！）',
+                          isPopular: true,
+                          isLoading: _isLoading,
+                          isOwned: isOwned,
+                          onTap: isOwned
+                              ? null
+                              : (yearlyProProduct != null
+                                    ? () => _doPurchase(
+                                        () => _billingService.purchaseBasePlan(
+                                          yearlyProProduct,
+                                          offerToken: yearlyInfo.offerToken,
+                                        ),
+                                      )
+                                    : null),
+                        );
+                      },
                     ),
                     Positioned(
                       top: -10,
                       right: 16,
                       child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 4,
+                        ),
                         decoration: BoxDecoration(
                           color: Colors.orange,
                           borderRadius: BorderRadius.circular(12),
@@ -363,13 +503,15 @@ class _SubscriptionPageState extends State<SubscriptionPage> {
               ],
 
               // 3. One-time Ticket
-              if (ticketProduct != null)
+              if (ticketProduct != null &&
+                  !_billingService.hasActiveSubscription)
                 _SubscriptionCard(
                   title: '1回分チケット',
                   price: ticketProduct.price,
                   description: '1回分の判定チケット',
                   icon: Icons.confirmation_number,
                   isLoading: _isLoading,
+                  isOwned: _billingService.ticketCount > 0,
                   onTap: _purchaseTicket,
                 ),
             ],
@@ -378,27 +520,28 @@ class _SubscriptionPageState extends State<SubscriptionPage> {
 
             // Restore purchases
             TextButton(
-              onPressed: _isLoading ? null : () async {
-                setState(() => _isLoading = true);
-                try {
-                  await _billingService.restorePurchases();
-                  if (mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('購入の復元プロセスを開始しました')),
-                    );
-                  }
-                } catch (e) {
-                  if (mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text('復元中にエラーが発生しました: $e')),
-                    );
-                  }
-                } finally {
-                  if (mounted) {
-                    setState(() => _isLoading = false);
-                  }
-                }
-              },
+              onPressed: _isLoading
+                  ? null
+                  : () async {
+                      setState(() => _isLoading = true);
+                      final messenger = ScaffoldMessenger.of(context);
+                      try {
+                        await _billingService.restorePurchases();
+                        if (!mounted) return;
+                        messenger.showSnackBar(
+                          const SnackBar(content: Text('購入の復元プロセスを開始しました')),
+                        );
+                      } catch (e) {
+                        if (!mounted) return;
+                        messenger.showSnackBar(
+                          SnackBar(content: Text('復元中にエラーが発生しました: $e')),
+                        );
+                      } finally {
+                        if (mounted) {
+                          setState(() => _isLoading = false);
+                        }
+                      }
+                    },
               child: const Text('以前の購入を復元'),
             ),
 
@@ -435,16 +578,12 @@ class _FeatureItem extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    
+
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 8),
       child: Row(
         children: [
-          Icon(
-            icon,
-            color: theme.colorScheme.primary,
-            size: 24,
-          ),
+          Icon(icon, color: theme.colorScheme.primary, size: 24),
           const SizedBox(width: 16),
           Expanded(
             child: Column(
@@ -477,6 +616,7 @@ class _SubscriptionCard extends StatelessWidget {
   final String description;
   final bool isPopular;
   final bool isLoading;
+  final bool isOwned;
   final IconData? icon;
   final VoidCallback? onTap;
 
@@ -486,6 +626,7 @@ class _SubscriptionCard extends StatelessWidget {
     required this.description,
     this.isPopular = false,
     this.isLoading = false,
+    this.isOwned = false,
     this.icon,
     this.onTap,
   });
@@ -493,12 +634,12 @@ class _SubscriptionCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    
+
     return Card(
       elevation: isPopular ? 4 : 1,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(16),
-        side: isPopular 
+        side: isPopular
             ? BorderSide(color: theme.colorScheme.primary, width: 2)
             : BorderSide.none,
       ),
@@ -547,10 +688,29 @@ class _SubscriptionCard extends StatelessWidget {
                   height: 24,
                   child: CircularProgressIndicator(strokeWidth: 2),
                 )
+              else if (isOwned)
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 6,
+                  ),
+                  decoration: BoxDecoration(
+                    color: theme.colorScheme.primaryContainer,
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: Text(
+                    '契約中',
+                    style: TextStyle(
+                      color: theme.colorScheme.onPrimaryContainer,
+                      fontSize: 12,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                )
               else
                 Icon(
                   Icons.arrow_forward_ios,
-                  color: theme.colorScheme.primary,
+                  color: isOwned ? Colors.grey : theme.colorScheme.primary,
                 ),
             ],
           ),

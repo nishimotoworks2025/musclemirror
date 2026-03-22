@@ -70,5 +70,17 @@ void main() {
       expect(status.isFree, isTrue);
       expect(status.resolvedEffectivePlan, 'free');
     });
+
+    test('falls back to Free when cancelled has no expiry', () {
+      final status = MeStatus.fromJson({
+        'plan': 'pro',
+        'effective_plan': 'pro',
+        'plan_status': 'cancelled',
+      });
+
+      expect(status.hasProEntitlement, isFalse);
+      expect(status.isFree, isTrue);
+      expect(status.resolvedEffectivePlan, 'free');
+    });
   });
 }

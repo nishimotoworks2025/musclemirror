@@ -1,13 +1,21 @@
 import 'dart:convert';
-import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import '../models/muscle_data.dart';
 import '../config/app_config.dart';
+import 'auth_service.dart';
 
-/// Gemini service for 2-stage muscle evaluation via AWS Lambda Proxy.
 /// Stage 1: Clothing/Composition check
 /// Stage 2: Muscle evaluation
+
+/// Exception thrown when the API indicates the Pro subscription has expired or is unauthorized.
+class ProExpiredException implements Exception {
+  final String message;
+  ProExpiredException(this.message);
+  @override
+  String toString() => 'ProExpiredException: $message';
+}
+
 class GeminiService {
   final String _apiBaseUrl;
 
@@ -18,20 +26,34 @@ class GeminiService {
     try {
       final imageBase64 = base64Encode(imageBytes);
       
+      final idToken = await AuthService().getValidIdToken();
       final response = await http.post(
         Uri.parse('$_apiBaseUrl/diagnosis'),
-        headers: {'Content-Type': 'application/json'},
+        headers: {
+          'Content-Type': 'application/json',
+          if (idToken != null) 'Authorization': 'Bearer $idToken',
+          if (idToken != null) 'x-mm-id-token': idToken,
+        },
         body: jsonEncode({
           'action': 'pre-check',
           'image_base64': imageBase64,
         }),
-      );
+      ).timeout(const Duration(seconds: 40));
 
       if (response.statusCode != 200) {
-        throw Exception('API Gateway error: ${response.statusCode}');
+        final errorBody = utf8.decode(response.bodyBytes);
+        throw Exception(
+          'API Gateway error: ${response.statusCode} body=$errorBody',
+        );
       }
 
-      final json = jsonDecode(response.body) as Map<String, dynamic>;
+      final rawBody = utf8.decode(response.bodyBytes);
+      final decoded = jsonDecode(rawBody);
+      final json = decoded is Map<String, dynamic>
+          ? decoded
+          : decoded is String
+              ? jsonDecode(decoded) as Map<String, dynamic>
+              : <String, dynamic>{};
       // The Lambda might wrap the object in another body string if not handled by proxy integration correctly
       // But we used proxy integration, so response.body should be the Lambda's response body.
       
@@ -43,7 +65,7 @@ class GeminiService {
       debugPrint('Gemini preCheck error: $e');
       debugPrint('$stack');
       return const PreCheckResult(
-        level: PreCheckLevel.fail,
+        level: PreCheckLevel.warn,
         reasonCode: 'api_error',
       );
     }
@@ -58,9 +80,14 @@ class GeminiService {
     try {
       final imageBase64 = base64Encode(imageBytes);
 
+      final idToken = await AuthService().getValidIdToken();
       final response = await http.post(
         Uri.parse('$_apiBaseUrl/diagnosis'),
-        headers: {'Content-Type': 'application/json'},
+        headers: {
+          'Content-Type': 'application/json',
+          if (idToken != null) 'Authorization': 'Bearer $idToken',
+          if (idToken != null) 'x-mm-id-token': idToken,
+        },
         body: jsonEncode({
           'action': 'evaluate',
           'image_base64': imageBase64,
@@ -69,7 +96,11 @@ class GeminiService {
             'is_pro': isPro,
           }
         }),
-      );
+      ).timeout(const Duration(seconds: 40));
+
+      if (response.statusCode == 401 || response.statusCode == 403) {
+        throw ProExpiredException('API Gateway error: ${response.statusCode}');
+      }
 
       if (response.statusCode != 200) {
         throw Exception('API Gateway error: ${response.statusCode}');
@@ -83,6 +114,9 @@ class GeminiService {
         'evaluation_type': evaluationType.name,
       });
     } catch (e, stack) {
+      if (e is ProExpiredException) {
+        rethrow;
+      }
       debugPrint('Gemini evaluate error: $e');
       debugPrint('$stack');
       return MuscleEvaluation.sample();

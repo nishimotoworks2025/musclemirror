@@ -1,6 +1,7 @@
-import 'package:flutter/material.dart';
 import 'package:fl_chart/fl_chart.dart';
+import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+
 import '../models/muscle_data.dart';
 import '../theme/app_theme.dart';
 
@@ -21,16 +22,15 @@ class OverviewTab extends StatefulWidget {
 }
 
 class _OverviewTabState extends State<OverviewTab> {
-  int? _comparisonIndex; // null=比較なし, インデックス=比較対象
+  int? _comparisonIndex;
 
-  MuscleEvaluation? get _currentEvaluation {
-    if (widget.evaluations.isEmpty) return widget.evaluation;
-    return widget.evaluations.last;
-  }
+  MuscleEvaluation? get _currentEvaluation => widget.evaluation;
 
   MuscleEvaluation? get _comparisonEvaluation {
-    if (_comparisonIndex == null || widget.evaluations.isEmpty) return null;
-    if (_comparisonIndex! < 0 || _comparisonIndex! >= widget.evaluations.length) return null;
+    if (_comparisonIndex == null) return null;
+    if (_comparisonIndex! < 0 || _comparisonIndex! >= widget.evaluations.length) {
+      return null;
+    }
     return widget.evaluations[_comparisonIndex!];
   }
 
@@ -38,8 +38,6 @@ class _OverviewTabState extends State<OverviewTab> {
     return DateFormat('yyyy/MM/dd HH:mm').format(date);
   }
 
-  /// スコア(0-10)を「上位X%」に変換する固定マッピング。
-  /// 一般男性の体型分布を想定した経験的テーブル。
   int _scoreToTopPercent(double score) {
     if (score >= 9.5) return 1;
     if (score >= 8.5) return 3;
@@ -54,7 +52,6 @@ class _OverviewTabState extends State<OverviewTab> {
   void _goToPreviousComparison() {
     setState(() {
       if (_comparisonIndex == null) {
-        // 比較なし→最新の1つ前
         if (widget.evaluations.length >= 2) {
           _comparisonIndex = widget.evaluations.length - 2;
         }
@@ -70,7 +67,6 @@ class _OverviewTabState extends State<OverviewTab> {
       if (_comparisonIndex! < widget.evaluations.length - 2) {
         _comparisonIndex = _comparisonIndex! + 1;
       } else {
-        // 最新の1つ前を超えたら比較なしに戻す
         _comparisonIndex = null;
       }
     });
@@ -85,7 +81,6 @@ class _OverviewTabState extends State<OverviewTab> {
   @override
   Widget build(BuildContext context) {
     final currentEval = _currentEvaluation;
-    
     if (currentEval == null) {
       return const Center(
         child: Column(
@@ -100,39 +95,29 @@ class _OverviewTabState extends State<OverviewTab> {
     }
 
     final theme = Theme.of(context);
-    final metrics = currentEval.overallMetrics;
     final comparisonEval = _comparisonEvaluation;
-    final hasMultipleEvaluations = widget.evaluations.length >= 2;
-
-    final topPercent = _scoreToTopPercent(currentEval.totalScore);
 
     return SingleChildScrollView(
       padding: const EdgeInsets.all(16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-
-          // Percentile Badge (top-left)
-          _PercentileBadge(topPercent: topPercent),
+          _EvaluationModeBadge(type: currentEval.evaluationType),
           const SizedBox(height: 12),
-
-          // Total Score Card
+          _PercentileBadge(topPercent: _scoreToTopPercent(currentEval.totalScore)),
+          const SizedBox(height: 12),
           _TotalScoreCard(
             score: currentEval.totalScore,
             comparisonScore: comparisonEval?.totalScore,
           ),
           const SizedBox(height: 24),
-
-          // Radar Chart
-          Text('全体指標', style: theme.textTheme.titleLarge),
+          Text('全体評価', style: theme.textTheme.titleLarge),
           const SizedBox(height: 16),
           _RadarChartCard(
-            metrics: metrics,
+            metrics: currentEval.overallMetrics,
             comparisonMetrics: comparisonEval?.overallMetrics,
           ),
-          
-          // Comparison Navigator (below chart)
-          if (hasMultipleEvaluations) ...[
+          if (widget.evaluations.length >= 2) ...[
             const SizedBox(height: 16),
             _ComparisonNavigator(
               comparisonEval: comparisonEval,
@@ -145,12 +130,10 @@ class _OverviewTabState extends State<OverviewTab> {
             ),
           ],
           const SizedBox(height: 24),
-
-          // Overall Comment
           Text('総合コメント', style: theme.textTheme.titleLarge),
           const SizedBox(height: 16),
           _OverallCommentCard(comment: currentEval.overallComment),
-          const SizedBox(height: 80), // FAB space
+          const SizedBox(height: 80),
         ],
       ),
     );
@@ -179,9 +162,7 @@ class _ComparisonNavigator extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final canGoPrevious = comparisonIndex == null 
-        ? totalCount >= 2 
-        : comparisonIndex! > 0;
+    final canGoPrevious = comparisonIndex == null ? totalCount >= 2 : comparisonIndex! > 0;
     final canGoNext = comparisonIndex != null;
 
     return Container(
@@ -192,48 +173,26 @@ class _ComparisonNavigator extends StatelessWidget {
       ),
       child: Row(
         children: [
-          // Previous button
           IconButton(
             onPressed: canGoPrevious ? onPrevious : null,
             icon: const Icon(Icons.chevron_left),
             tooltip: '前のデータと比較',
           ),
-          
-          // Status display
           Expanded(
             child: Column(
               children: [
                 if (comparisonEval == null)
                   Text(
                     '比較なし',
-                    style: theme.textTheme.bodyMedium?.copyWith(
-                      color: theme.hintColor,
-                    ),
+                    style: theme.textTheme.bodyMedium?.copyWith(color: theme.hintColor),
                     textAlign: TextAlign.center,
                   )
                 else ...[
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Container(
-                        width: 10,
-                        height: 10,
-                        decoration: BoxDecoration(
-                          color: Colors.grey.withAlpha(100),
-                          border: Border.all(color: Colors.grey, width: 2),
-                          shape: BoxShape.circle,
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Flexible(
-                        child: Text(
-                          '比較: ${formatDate(comparisonEval!.evaluatedAt)}',
-                          style: theme.textTheme.bodySmall,
-                          textAlign: TextAlign.center,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                    ],
+                  Text(
+                    '比較: ${formatDate(comparisonEval!.evaluatedAt)}',
+                    style: theme.textTheme.bodySmall,
+                    textAlign: TextAlign.center,
+                    overflow: TextOverflow.ellipsis,
                   ),
                   const SizedBox(height: 4),
                   GestureDetector(
@@ -250,8 +209,6 @@ class _ComparisonNavigator extends StatelessWidget {
               ],
             ),
           ),
-          
-          // Next button
           IconButton(
             onPressed: canGoNext ? onNext : null,
             icon: const Icon(Icons.chevron_right),
@@ -276,7 +233,7 @@ class _TotalScoreCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final scoreColor = AppTheme.getScoreColor(score);
-    final diff = comparisonScore != null ? score - comparisonScore! : null;
+    final diff = comparisonScore == null ? null : score - comparisonScore!;
 
     return Card(
       child: Padding(
@@ -287,13 +244,10 @@ class _TotalScoreCard extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    '総合スコア',
-                    style: theme.textTheme.titleMedium,
-                  ),
+                  Text('総合スコア', style: theme.textTheme.titleMedium),
                   const SizedBox(height: 4),
                   Text(
-                    '理想体型への到達度',
+                    '10点満点の評価',
                     style: theme.textTheme.bodyMedium?.copyWith(
                       color: theme.textTheme.bodyMedium?.color?.withAlpha(150),
                     ),
@@ -303,15 +257,27 @@ class _TotalScoreCard extends StatelessWidget {
                     Row(
                       children: [
                         Icon(
-                          diff > 0 ? Icons.arrow_upward : diff < 0 ? Icons.arrow_downward : Icons.remove,
+                          diff > 0
+                              ? Icons.arrow_upward
+                              : diff < 0
+                                  ? Icons.arrow_downward
+                                  : Icons.remove,
                           size: 16,
-                          color: diff > 0 ? AppTheme.scoreExcellent : diff < 0 ? AppTheme.scorePoor : Colors.grey,
+                          color: diff > 0
+                              ? AppTheme.scoreExcellent
+                              : diff < 0
+                                  ? AppTheme.scorePoor
+                                  : Colors.grey,
                         ),
                         const SizedBox(width: 4),
                         Text(
                           '${diff >= 0 ? '+' : ''}${diff.toStringAsFixed(1)} vs 比較データ',
                           style: theme.textTheme.bodySmall?.copyWith(
-                            color: diff > 0 ? AppTheme.scoreExcellent : diff < 0 ? AppTheme.scorePoor : Colors.grey,
+                            color: diff > 0
+                                ? AppTheme.scoreExcellent
+                                : diff < 0
+                                    ? AppTheme.scorePoor
+                                    : Colors.grey,
                           ),
                         ),
                       ],
@@ -325,10 +291,7 @@ class _TotalScoreCard extends StatelessWidget {
               height: 80,
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
-                border: Border.all(
-                  color: scoreColor,
-                  width: 4,
-                ),
+                border: Border.all(color: scoreColor, width: 4),
               ),
               child: Center(
                 child: Text(
@@ -363,35 +326,20 @@ class _RadarChartCard extends StatelessWidget {
     final isDark = theme.brightness == Brightness.dark;
 
     final dataSets = <RadarDataSet>[
-      // Invisible min data set for 0 baseline
       RadarDataSet(
-        dataEntries: [
-          const RadarEntry(value: 0),
-          const RadarEntry(value: 0),
-          const RadarEntry(value: 0),
-          const RadarEntry(value: 0),
-          const RadarEntry(value: 0),
-        ],
+        dataEntries: List.generate(5, (_) => const RadarEntry(value: 0)),
         fillColor: Colors.transparent,
         borderColor: Colors.transparent,
         entryRadius: 0,
       ),
-      // Invisible max data set for scale (10)
       RadarDataSet(
-        dataEntries: [
-          const RadarEntry(value: 10),
-          const RadarEntry(value: 10),
-          const RadarEntry(value: 10),
-          const RadarEntry(value: 10),
-          const RadarEntry(value: 10),
-        ],
+        dataEntries: List.generate(5, (_) => const RadarEntry(value: 10)),
         fillColor: Colors.transparent,
         borderColor: Colors.transparent,
         entryRadius: 0,
       ),
     ];
 
-    // Add comparison data first (background)
     if (comparisonMetrics != null) {
       dataSets.add(
         RadarDataSet(
@@ -410,7 +358,6 @@ class _RadarChartCard extends StatelessWidget {
       );
     }
 
-    // Add current data (foreground)
     dataSets.add(
       RadarDataSet(
         dataEntries: [
@@ -449,20 +396,8 @@ class _RadarChartCard extends StatelessWidget {
                     color: isDark ? Colors.white70 : Colors.black87,
                   ),
                   getTitle: (index, angle) {
-                    switch (index) {
-                      case 0:
-                        return RadarChartTitle(text: '量感');
-                      case 1:
-                        return RadarChartTitle(text: '定義');
-                      case 2:
-                        return RadarChartTitle(text: 'バランス');
-                      case 3:
-                        return RadarChartTitle(text: '絞り');
-                      case 4:
-                        return RadarChartTitle(text: '姿勢');
-                      default:
-                        return const RadarChartTitle(text: '');
-                    }
+                    const titles = ['筋量', '定義感', 'バランス', '絞り', '姿勢'];
+                    return RadarChartTitle(text: titles[index]);
                   },
                   tickCount: 5,
                   ticksTextStyle: TextStyle(
@@ -478,14 +413,13 @@ class _RadarChartCard extends StatelessWidget {
                 ),
               ),
             ),
-            // Legend for current data
             if (comparisonMetrics != null) ...[
               const SizedBox(height: 12),
-              Row(
+              const Row(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
                   _LegendItem(color: AppTheme.brandBlue, label: '現在'),
-                  const SizedBox(width: 24),
+                  SizedBox(width: 24),
                   _LegendItem(color: Colors.grey, label: '比較対象'),
                 ],
               ),
@@ -501,7 +435,10 @@ class _LegendItem extends StatelessWidget {
   final Color color;
   final String label;
 
-  const _LegendItem({required this.color, required this.label});
+  const _LegendItem({
+    required this.color,
+    required this.label,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -518,13 +455,7 @@ class _LegendItem extends StatelessWidget {
           ),
         ),
         const SizedBox(width: 6),
-        Text(
-          label,
-          style: TextStyle(
-            fontSize: 11,
-            color: Theme.of(context).textTheme.bodySmall?.color,
-          ),
-        ),
+        Text(label, style: Theme.of(context).textTheme.bodySmall),
       ],
     );
   }
@@ -538,7 +469,6 @@ class _OverallCommentCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-
     if (comment == null || comment!.isEmpty) {
       return Card(
         child: Padding(
@@ -572,14 +502,10 @@ class _OverallCommentCard extends StatelessWidget {
           children: [
             Row(
               children: [
-                Icon(
-                  Icons.auto_awesome,
-                  color: AppTheme.brandBlue,
-                  size: 20,
-                ),
+                const Icon(Icons.auto_awesome, color: AppTheme.brandBlue, size: 20),
                 const SizedBox(width: 12),
                 Text(
-                  '判定結果',
+                  '分析コメント',
                   style: theme.textTheme.titleMedium?.copyWith(
                     fontWeight: FontWeight.w600,
                   ),
@@ -589,9 +515,7 @@ class _OverallCommentCard extends StatelessWidget {
             const SizedBox(height: 16),
             Text(
               comment!,
-              style: theme.textTheme.bodyMedium?.copyWith(
-                height: 1.6,
-              ),
+              style: theme.textTheme.bodyMedium?.copyWith(height: 1.6),
             ),
           ],
         ),
@@ -600,17 +524,16 @@ class _OverallCommentCard extends StatelessWidget {
   }
 }
 
-/// 「上位X%」パーセンタイルバッジ
 class _PercentileBadge extends StatelessWidget {
   final int topPercent;
 
   const _PercentileBadge({required this.topPercent});
 
   Color _badgeColor() {
-    if (topPercent <= 3) return const Color(0xFFFFD700);  // Gold
-    if (topPercent <= 8) return const Color(0xFFC0C0C0);  // Silver
-    if (topPercent <= 20) return const Color(0xFFCD7F32); // Bronze
-    return const Color(0xFF607D8B);                        // Blue Grey
+    if (topPercent <= 3) return const Color(0xFFFFD700);
+    if (topPercent <= 8) return const Color(0xFFC0C0C0);
+    if (topPercent <= 20) return const Color(0xFFCD7F32);
+    return const Color(0xFF607D8B);
   }
 
   IconData _badgeIcon() {
@@ -655,6 +578,56 @@ class _PercentileBadge extends StatelessWidget {
                 ),
               ],
             ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _EvaluationModeBadge extends StatelessWidget {
+  final EvaluationType type;
+
+  const _EvaluationModeBadge({required this.type});
+
+  @override
+  Widget build(BuildContext context) {
+    final isPhysique = type == EvaluationType.physique;
+    final color =
+        isPhysique ? const Color(0xFFB23A48) : Theme.of(context).colorScheme.primary;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      decoration: BoxDecoration(
+        color: color.withAlpha(20),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: color.withAlpha(120)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            isPhysique ? Icons.local_fire_department : Icons.tune,
+            size: 16,
+            color: color,
+          ),
+          const SizedBox(width: 8),
+          Text(
+            '${type.label}モード',
+            style: TextStyle(
+              color: color,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          const SizedBox(width: 8),
+          Text(
+            type.description,
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: Theme.of(context)
+                      .textTheme
+                      .bodySmall
+                      ?.color
+                      ?.withAlpha(170),
+                ),
           ),
         ],
       ),

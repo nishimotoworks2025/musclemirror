@@ -1,4 +1,4 @@
-import 'dart:io';
+﻿import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import '../models/muscle_data.dart';
@@ -28,7 +28,7 @@ class HistoryTab extends StatelessWidget {
             Text('履歴がありません', style: TextStyle(color: Colors.grey)),
             SizedBox(height: 8),
             Text(
-              '判定を行うと履歴が記録されます',
+              '判定を行うと履歴が記録されます。',
               style: TextStyle(color: Colors.grey, fontSize: 12),
             ),
           ],
@@ -102,6 +102,9 @@ class _HistoryCard extends StatelessWidget {
     final isDark = theme.brightness == Brightness.dark;
     final dateFormat = DateFormat('yyyy/MM/dd HH:mm');
     final scoreColor = AppTheme.getScoreColor(evaluation.totalScore);
+    final isPhysique = evaluation.evaluationType == EvaluationType.physique;
+    final modeColor =
+        isPhysique ? const Color(0xFFB23A48) : theme.colorScheme.primary;
 
     return Card(
       clipBehavior: Clip.antiAlias,
@@ -140,6 +143,44 @@ class _HistoryCard extends StatelessWidget {
                               fontWeight: FontWeight.w500,
                             ),
                           ),
+                          if (evaluation.isPro) ...[
+                            const SizedBox(width: 8),
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                              decoration: BoxDecoration(
+                                color: Colors.amber,
+                                borderRadius: BorderRadius.circular(4),
+                              ),
+                              child: const Text(
+                                'Pro',
+                                style: TextStyle(
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.bold,
+                                  color: Colors.white,
+                                ),
+                              ),
+                            ),
+                          ],
+                          const SizedBox(width: 8),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 2,
+                            ),
+                            decoration: BoxDecoration(
+                              color: modeColor.withAlpha(20),
+                              borderRadius: BorderRadius.circular(999),
+                              border: Border.all(color: modeColor.withAlpha(120)),
+                            ),
+                            child: Text(
+                              evaluation.evaluationType.label,
+                              style: TextStyle(
+                                fontSize: 10,
+                                fontWeight: FontWeight.bold,
+                                color: modeColor,
+                              ),
+                            ),
+                          ),
                         ],
                       ),
                       const SizedBox(height: 8),
@@ -173,14 +214,6 @@ class _HistoryCard extends StatelessWidget {
                           ],
                         ),
                       ),
-                      const SizedBox(height: 4),
-                      // Evaluation type
-                      Text(
-                        _getEvaluationTypeName(evaluation.evaluationType),
-                        style: theme.textTheme.bodySmall?.copyWith(
-                          color: theme.textTheme.bodySmall?.color?.withAlpha(150),
-                        ),
-                      ),
                     ],
                   ),
                 ),
@@ -201,15 +234,6 @@ class _HistoryCard extends StatelessWidget {
       ),
     );
   }
-
-  String _getEvaluationTypeName(EvaluationType type) {
-    return switch (type) {
-      EvaluationType.balanced => 'バランス重視',
-      EvaluationType.muscleFocused => '筋量重視',
-      EvaluationType.leanFocused => '絞り重視',
-    };
-  }
-
   Widget _buildThumbnail(bool isDark) {
     if (evaluation.imagePath != null && 
         File(evaluation.imagePath!).existsSync()) {

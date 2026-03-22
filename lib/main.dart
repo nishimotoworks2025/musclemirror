@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'services/auth_service.dart';
 import 'theme/app_theme.dart';
+import 'screens/home_screen.dart';
 import 'screens/login_screen.dart';
 
 /// Mixin for accessing theme control methods
@@ -12,33 +14,36 @@ mixin ThemeController {
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   final prefs = await SharedPreferences.getInstance();
-  final themeModeIndex = prefs.getInt('themeMode') ?? 0; // 0: system, 1: light, 2: dark
-  
+  final themeModeIndex =
+      prefs.getInt('themeMode') ?? 0; // 0: system, 1: light, 2: dark
+  await AuthService().initialize();
+
   runApp(MuscleMirrorApp(initialThemeMode: themeModeIndex));
 }
 
 class MuscleMirrorApp extends StatefulWidget {
   final int initialThemeMode;
-  
+
   const MuscleMirrorApp({super.key, required this.initialThemeMode});
 
   @override
   State<MuscleMirrorApp> createState() => _MuscleMirrorAppState();
-  
+
   static ThemeController? of(BuildContext context) {
     return context.findAncestorStateOfType<_MuscleMirrorAppState>();
   }
 }
 
-class _MuscleMirrorAppState extends State<MuscleMirrorApp> with ThemeController {
+class _MuscleMirrorAppState extends State<MuscleMirrorApp>
+    with ThemeController {
   late int _themeModeIndex;
-  
+
   @override
   void initState() {
     super.initState();
     _themeModeIndex = widget.initialThemeMode;
   }
-  
+
   ThemeMode get _themeMode {
     switch (_themeModeIndex) {
       case 1:
@@ -49,7 +54,7 @@ class _MuscleMirrorAppState extends State<MuscleMirrorApp> with ThemeController 
         return ThemeMode.system;
     }
   }
-  
+
   @override
   Future<void> setThemeMode(int index) async {
     setState(() {
@@ -58,7 +63,7 @@ class _MuscleMirrorAppState extends State<MuscleMirrorApp> with ThemeController 
     final prefs = await SharedPreferences.getInstance();
     await prefs.setInt('themeMode', index);
   }
-  
+
   @override
   int get currentThemeModeIndex => _themeModeIndex;
 
@@ -70,7 +75,9 @@ class _MuscleMirrorAppState extends State<MuscleMirrorApp> with ThemeController 
       theme: AppTheme.lightTheme,
       darkTheme: AppTheme.darkTheme,
       themeMode: _themeMode,
-      home: const LoginScreen(),
+      home: AuthService().isAuthenticated
+          ? const HomeScreen()
+          : const LoginScreen(),
     );
   }
 }

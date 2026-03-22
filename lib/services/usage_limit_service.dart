@@ -1,159 +1,269 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'user_mode_service.dart';
-import 'device_id_service.dart';
+
+import 'auth_service.dart';
 import 'billing_api_client.dart';
 import 'billing_service.dart';
+import 'device_id_service.dart';
+import 'user_mode_service.dart';
 
-/// Usage limits per user mode.
+String? resolveLegacyDailyKey({
+  required String? userId,
+  required String? Function(String key) readString,
+}) {
+  for (final bucket in const ['pro', 'free']) {
+    final key = userId != null
+        ? '${UsageLimitService.dailyKeyKey}_${userId}_$bucket'
+        : '${UsageLimitService.dailyKeyKey}_$bucket';
+    final value = readString(key);
+    if (value != null) {
+      return value;
+    }
+  }
+  return null;
+}
+
+int resolveLegacyDailyCount({
+  required String? userId,
+  required String? storedKey,
+  required String? Function(String key) readString,
+  required int? Function(String key) readInt,
+}) {
+  if (storedKey == null) {
+    return 0;
+  }
+
+  var maxCount = 0;
+  for (final bucket in const ['pro', 'free']) {
+    final legacyKey = userId != null
+        ? '${UsageLimitService.dailyKeyKey}_${userId}_$bucket'
+        : '${UsageLimitService.dailyKeyKey}_$bucket';
+    if (readString(legacyKey) != storedKey) {
+      continue;
+    }
+
+    final legacyCountKey = userId != null
+        ? '${UsageLimitService.dailyUsedCountKey}_${userId}_$bucket'
+        : '${UsageLimitService.dailyUsedCountKey}_$bucket';
+    final count = readInt(legacyCountKey) ?? 0;
+    if (count > maxCount) {
+      maxCount = count;
+    }
+  }
+  return maxCount;
+}
+
+int resolveFreeRemainingCount({
+  required int localUsed,
+  required int? serverUsedToday,
+}) {
+  final effectiveUsed = localUsed > (serverUsedToday ?? 0)
+      ? localUsed
+      : (serverUsedToday ?? 0);
+  return (UsageLimits.freeDailyLimit - effectiveUsed).clamp(
+    0,
+    UsageLimits.freeDailyLimit,
+  );
+}
+
 class UsageLimits {
   static const int proDailyLimit = 3;
   static const int freeDailyLimit = 1;
   static const int guestTotalLimit = 3;
 }
 
-/// Service for tracking and enforcing usage limits based on user mode.
-///
-/// - Pro: 3 diagnoses per day
-/// - Free: 1 diagnosis per day
-/// - Guest: 3 total diagnoses (device-bound, survives reinstall)
 class UsageLimitService {
   static final UsageLimitService _instance = UsageLimitService._internal();
   factory UsageLimitService() => _instance;
   UsageLimitService._internal();
 
-  final UserModeService _userModeService = UserModeService();
   final DeviceIdService _deviceIdService = DeviceIdService();
+  final AuthService _authService = AuthService();
+  bool _legacyMigrationDone = false;
 
-  // SharedPreferences keys
   static const String _dailyUsedCountKey = 'usage_daily_count';
   static const String _dailyKeyKey = 'usage_daily_key';
+  static const String dailyUsedCountKey = _dailyUsedCountKey;
+  static const String dailyKeyKey = _dailyKeyKey;
 
-  /// Check if the current user can perform a diagnosis.
   Future<bool> canUse() async {
-    final mode = _userModeService.currentMode;
+    await _authService.restoreSession();
+    final mode = _effectiveMode();
+    final used = await _getDailyUsedCount();
+    final serverRemaining = _getServerRemainingCount();
+
+    debugPrint(
+      'UsageLimitService: canUse() - Mode: $mode, Used: $used, UserId: ${_authService.currentUserId}',
+    );
+
     switch (mode) {
       case UserMode.pro:
         if (BillingService().hasActiveSubscription) {
-          return await _getDailyUsedCount() < UsageLimits.proDailyLimit;
-        } else {
-          // チケットが1枚以上あれば使用可能（日次制限なし・翌日も有効）
-          return BillingService().ticketCount > 0;
+          if (serverRemaining != null) {
+            return serverRemaining > 0;
+          }
+          final limit = _getServerDailyLimit() ?? UsageLimits.proDailyLimit;
+          return used < limit;
         }
+        return BillingService().ticketCount > 0;
       case UserMode.free:
-        return await _getDailyUsedCount() < UsageLimits.freeDailyLimit;
+        if (BillingService().ticketCount > 0) {
+          return true;
+        }
+        return resolveFreeRemainingCount(
+              localUsed: used,
+              serverUsedToday: BillingService().meStatus?.usedToday,
+            ) >
+            0;
       case UserMode.guest:
         return await _getGuestTotalUsedCount() < UsageLimits.guestTotalLimit;
     }
   }
 
-  /// Record a usage (call after successful diagnosis).
-  Future<void> recordUse() async {
-    final mode = _userModeService.currentMode;
+  Future<void> recordUse({bool wasTicket = false}) async {
+    await _authService.restoreSession();
+    final mode = _effectiveMode();
     final prefs = await SharedPreferences.getInstance();
 
     if (mode == UserMode.guest) {
       final deviceId = await _deviceIdService.getDeviceId();
       try {
         await BillingApiClient().incrementGuestUsage(deviceId);
-        debugPrint('UsageLimitService: Guest usage incremented via API');
       } catch (e) {
         debugPrint('UsageLimitService: Failed to increment guest usage: $e');
-        // Optionally fallback to local storage if API fails
       }
-    } else if (mode == UserMode.pro && !BillingService().hasActiveSubscription) {
-      // チケットユーザー: チケットを1枚消費（日次カウントは管理しない）
-      await BillingService().consumeTicket();
-      debugPrint('UsageLimitService: Ticket consumed. Remaining: ${BillingService().ticketCount}');
-    } else {
-      // Pro（サブスク）or Free: 日次カウント管理
-      final todayKey = _todayKey();
-      final storedKey = prefs.getString(_dailyKeyKey);
-
-      if (storedKey != todayKey) {
-        // New day, reset counter
-        await prefs.setString(_dailyKeyKey, todayKey);
-        await prefs.setInt(_dailyUsedCountKey, 1);
-        debugPrint('UsageLimitService: New day, count reset to 1');
-      } else {
-        final current = prefs.getInt(_dailyUsedCountKey) ?? 0;
-        await prefs.setInt(_dailyUsedCountKey, current + 1);
-        debugPrint('UsageLimitService: Daily used: ${current + 1}');
-      }
+      return;
     }
+
+    if (wasTicket) {
+      debugPrint(
+        'UsageLimitService: Ticket used for ${_authService.currentUserId}, skipping daily count increment',
+      );
+      return;
+    }
+
+    // Logged-in usage is enforced by the diagnosis API and reflected in /me.
+    // Prefer syncing back to the server result instead of mixing Pro and Free
+    // usage locally across entitlement transitions on the same day.
+    if (_authService.isAuthenticated && BillingService().meStatus != null) {
+      await BillingService().syncWithServer();
+      return;
+    }
+
+    final userId = _authService.currentUserId;
+    final countKey = _dailyCountKeyForUser(userId);
+    final keyKey = _dailyKeyForUser(userId);
+
+    final todayKey = _todayKey();
+    final storedKey = prefs.getString(keyKey);
+
+    if (storedKey != todayKey) {
+      await prefs.setString(keyKey, todayKey);
+      await prefs.setInt(countKey, 1);
+      debugPrint('UsageLimitService: New day, count reset to 1 for $userId');
+      return;
+    }
+
+    final current = prefs.getInt(countKey) ?? 0;
+    await prefs.setInt(countKey, current + 1);
+    debugPrint('UsageLimitService: Daily used for $userId: ${current + 1}');
   }
 
-  /// Get remaining usage count for current mode.
   Future<int> getRemainingCount() async {
-    final mode = _userModeService.currentMode;
+    await _authService.restoreSession();
+    final mode = _effectiveMode();
+    final used = await _getDailyUsedCount();
+    final serverRemaining = _getServerRemainingCount();
+
     switch (mode) {
       case UserMode.pro:
         if (BillingService().hasActiveSubscription) {
-          final used = await _getDailyUsedCount();
-          return (UsageLimits.proDailyLimit - used).clamp(0, UsageLimits.proDailyLimit);
-        } else {
-          // チケット枚数のみ（日次カウントは加算しない）
+          if (serverRemaining != null) {
+            return serverRemaining;
+          }
+          final limit = _getServerDailyLimit() ?? UsageLimits.proDailyLimit;
+          return (limit - used).clamp(0, limit);
+        }
+        return BillingService().ticketCount;
+      case UserMode.free:
+        if (BillingService().ticketCount > 0) {
           return BillingService().ticketCount;
         }
-      case UserMode.free:
-        final used = await _getDailyUsedCount();
-        return (UsageLimits.freeDailyLimit - used).clamp(0, UsageLimits.freeDailyLimit);
+        return resolveFreeRemainingCount(
+          localUsed: used,
+          serverUsedToday: BillingService().meStatus?.usedToday,
+        );
       case UserMode.guest:
         final used = await _getGuestTotalUsedCount();
-        return (UsageLimits.guestTotalLimit - used).clamp(0, UsageLimits.guestTotalLimit);
+        return (UsageLimits.guestTotalLimit - used).clamp(
+          0,
+          UsageLimits.guestTotalLimit,
+        );
     }
   }
 
-  /// Get the limit for current mode.
   int getLimit() {
-    final mode = _userModeService.currentMode;
+    final mode = _effectiveMode();
+
     switch (mode) {
       case UserMode.pro:
         if (BillingService().hasActiveSubscription) {
-          return UsageLimits.proDailyLimit;
-        } else {
-          // チケット枚数のみ
+          return _getServerDailyLimit() ?? UsageLimits.proDailyLimit;
+        }
+        return BillingService().ticketCount;
+      case UserMode.free:
+        if (BillingService().ticketCount > 0) {
           return BillingService().ticketCount;
         }
-      case UserMode.free:
         return UsageLimits.freeDailyLimit;
       case UserMode.guest:
         return UsageLimits.guestTotalLimit;
     }
   }
 
-  /// Get a human-readable description of the limit.
   String getLimitDescription() {
-    final mode = _userModeService.currentMode;
+    final mode = _effectiveMode();
+
     switch (mode) {
       case UserMode.pro:
         if (BillingService().hasActiveSubscription) {
-          return '1日${UsageLimits.proDailyLimit}回まで';
-        } else {
-          return 'チケット残り: ${BillingService().ticketCount}回';
+          return 'Daily limit: ${getLimit()}';
         }
+        return 'Tickets left: ${BillingService().ticketCount}';
       case UserMode.free:
-        return '1日${UsageLimits.freeDailyLimit}回まで';
+        if (BillingService().ticketCount > 0) {
+          return 'Tickets left: ${BillingService().ticketCount}';
+        }
+        return 'Daily limit: ${getLimit()}';
       case UserMode.guest:
-        return '合計${UsageLimits.guestTotalLimit}回まで';
+        return 'Total limit: ${UsageLimits.guestTotalLimit}';
     }
   }
-
-  // --- Private helpers ---
 
   Future<int> _getDailyUsedCount() async {
     final prefs = await SharedPreferences.getInstance();
-    final storedKey = prefs.getString(_dailyKeyKey);
-    final todayKey = _todayKey();
+    final userId = _authService.currentUserId;
+    final countKey = _dailyCountKeyForUser(userId);
+    final keyKey = _dailyKeyForUser(userId);
 
-    if (storedKey != todayKey) {
-      // Different day, count is effectively 0
+    await _migrateLegacyDailyUsageIfNeeded(prefs, userId);
+
+    final storedKey = prefs.getString(keyKey);
+    if (storedKey != _todayKey()) {
       return 0;
     }
-    return prefs.getInt(_dailyUsedCountKey) ?? 0;
+
+    final storedCount = prefs.getInt(countKey) ?? 0;
+    return storedCount;
   }
 
   Future<int> _getGuestTotalUsedCount() async {
+    await _authService.restoreSession();
+    if (_authService.isAuthenticated) {
+      return 0;
+    }
     final deviceId = await _deviceIdService.getDeviceId();
     try {
       return await BillingApiClient().fetchGuestUsage(deviceId);
@@ -161,6 +271,95 @@ class UsageLimitService {
       debugPrint('UsageLimitService: Failed to fetch guest usage: $e');
       return 0;
     }
+  }
+
+  int? _getServerDailyLimit() {
+    if (!_authService.isAuthenticated) {
+      return null;
+    }
+    return BillingService().meStatus?.dailyLimit;
+  }
+
+  int? _getServerRemainingCount() {
+    if (!_authService.isAuthenticated) {
+      return null;
+    }
+    if (BillingService().ticketCount > 0) {
+      return null;
+    }
+    return BillingService().meStatus?.remainingCount;
+  }
+
+  String _dailyCountKeyForUser(String? userId) {
+    if (userId != null) {
+      return '${_dailyUsedCountKey}_$userId';
+    }
+    return _dailyUsedCountKey;
+  }
+
+  String _dailyKeyForUser(String? userId) {
+    if (userId != null) {
+      return '${_dailyKeyKey}_$userId';
+    }
+    return _dailyKeyKey;
+  }
+
+  Future<void> _migrateLegacyDailyUsageIfNeeded(
+    SharedPreferences prefs,
+    String? userId,
+  ) async {
+    if (_legacyMigrationDone) {
+      return;
+    }
+
+    final unifiedKey = _dailyKeyForUser(userId);
+    final unifiedCountKey = _dailyCountKeyForUser(userId);
+    if (prefs.containsKey(unifiedKey) || prefs.containsKey(unifiedCountKey)) {
+      _legacyMigrationDone = true;
+      return;
+    }
+
+    final legacyDayKey = resolveLegacyDailyKey(
+      userId: userId,
+      readString: prefs.getString,
+    );
+    if (legacyDayKey == null) {
+      _legacyMigrationDone = true;
+      return;
+    }
+
+    final legacyCount = resolveLegacyDailyCount(
+      userId: userId,
+      storedKey: legacyDayKey,
+      readString: prefs.getString,
+      readInt: prefs.getInt,
+    );
+
+    await prefs.setString(unifiedKey, legacyDayKey);
+    await prefs.setInt(unifiedCountKey, legacyCount);
+
+    for (final bucket in const ['pro', 'free']) {
+      final legacyKey = userId != null
+          ? '${_dailyKeyKey}_${userId}_$bucket'
+          : '${_dailyKeyKey}_$bucket';
+      final legacyCountKey = userId != null
+          ? '${_dailyUsedCountKey}_${userId}_$bucket'
+          : '${_dailyUsedCountKey}_$bucket';
+      unawaited(prefs.remove(legacyKey));
+      unawaited(prefs.remove(legacyCountKey));
+    }
+
+    _legacyMigrationDone = true;
+  }
+
+  UserMode _effectiveMode() {
+    if (!_authService.isAuthenticated) {
+      return UserMode.guest;
+    }
+    if (BillingService().hasActiveSubscription) {
+      return UserMode.pro;
+    }
+    return UserMode.free;
   }
 
   String _todayKey() {

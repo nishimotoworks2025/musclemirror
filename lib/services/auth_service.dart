@@ -1,380 +1,467 @@
 import 'dart:async';
 import 'dart:convert';
-import 'package:amazon_cognito_identity_dart_2/cognito.dart';
-import 'package:app_links/app_links.dart';
-import 'package:http/http.dart' as http;
-import 'package:flutter_web_auth_2/flutter_web_auth_2.dart';
+
+import 'package:amplify_auth_cognito/amplify_auth_cognito.dart';
+import 'package:amplify_flutter/amplify_flutter.dart';
+import 'package:flutter/foundation.dart';
+
 import '../config/app_config.dart';
 import 'billing_api_client.dart';
+import 'billing_service.dart';
+import 'history_service.dart';
 
-/// AWS Cognito authentication service (shared with TrueSkin).
 class AuthService {
+  static const Duration _socialLoginTimeout = Duration(seconds: 60);
+
   static final AuthService _instance = AuthService._internal();
   factory AuthService() => _instance;
-  
-  late final CognitoUserPool _userPool;
-  CognitoUser? _cognitoUser;
-  CognitoUserSession? _session;
 
-  final _appLinks = AppLinks();
-  StreamSubscription? _linkSubscription;
+  final StreamController<bool> _authStateController =
+      StreamController<bool>.broadcast();
 
-  final _authStateController = StreamController<bool>.broadcast();
+  bool _configured = false;
+  bool _isAuthenticated = false;
+  String? _accessToken;
+  String? _idToken;
+  String? _userEmail;
+  String? _currentUserId;
+
   Stream<bool> get authStateChanges => _authStateController.stream;
+  bool get isAuthenticated => _isAuthenticated;
+  String? get userEmail => _userEmail;
+  String? get accessToken => _accessToken;
+  String? get idToken => _idToken;
+  String? get currentUserId => _currentUserId;
 
-  AuthService._internal() {
-    _userPool = CognitoUserPool(
-      AppConfig.userPoolId,
-      AppConfig.userPoolClientId,
-    );
-    _initDeepLinkListener();
-  }
+  AuthService._internal();
 
-  void _initDeepLinkListener() {
-    _linkSubscription = _appLinks.uriLinkStream.listen((uri) {
-      if (uri.scheme == 'musclemirror') {
-        if (uri.host == 'callback') {
-          _handleRedirect(uri);
-        } else if (uri.host == 'logout') {
-          // Handle successful logout redirect if needed
-          _authStateController.add(false);
-        }
-      }
-    });
+  Future<void> initialize() async {
+    await _configure();
+    await restoreSession();
   }
 
   void dispose() {
-    _linkSubscription?.cancel();
     _authStateController.close();
   }
 
-  /// Check if user is currently authenticated.
-  bool get isAuthenticated => _session?.isValid() ?? false;
+  Future<void> _configure() async {
+    if (_configured) {
+      return;
+    }
 
-  /// Get current user's email.
-  String? get userEmail => _cognitoUser?.username;
+    try {
+      await Amplify.addPlugins([AmplifyAuthCognito()]);
+      await Amplify.configure(AppConfig.amplifyJson);
+    } on AmplifyAlreadyConfiguredException {
+      // Another singleton instance or a previous app start already configured it.
+    }
 
-  /// Get current access token.
-  String? get accessToken => _session?.getAccessToken().getJwtToken();
+    _configured = true;
+  }
 
-  /// Get current ID token.
-  String? get idToken => _session?.getIdToken().getJwtToken();
-
-  /// Sign in with email and password.
   Future<AuthResult> signIn(String email, String password) async {
-    _cognitoUser = CognitoUser(email, _userPool);
-    final authDetails = AuthenticationDetails(
-      username: email,
-      password: password,
-    );
+    await _configure();
+    final normalizedEmail = email.trim().toLowerCase();
 
     try {
-      _session = await _cognitoUser!.authenticateUser(authDetails);
-      _authStateController.add(true);
-      return AuthResult.success();
-    } on CognitoUserNewPasswordRequiredException {
-      return AuthResult.failure('新しいパスワードの設定が必要です');
-    } on CognitoUserMfaRequiredException {
-      return AuthResult.failure('MFA認証が必要です');
-    } on CognitoUserConfirmationNecessaryException {
-      return AuthResult.failure('メール認証が必要です');
-    } on CognitoClientException catch (e) {
-      return AuthResult.failure(e.message ?? '認証エラーが発生しました');
-    } catch (e) {
-      return AuthResult.failure('ログインに失敗しました: $e');
+      await Amplify.Auth.signOut();
+    } catch (_) {
+      // Ignore stale-session cleanup failures.
     }
-  }
 
-  /// Sign out the current user.
-  Future<void> signOut() async {
-    if (_cognitoUser != null) {
-      await _cognitoUser!.signOut();
-      _cognitoUser = null;
-      _session = null;
-      _authStateController.add(false);
-
-      // Also clear Cognito session in browser to force account selection next time
-      final clientId = AppConfig.userPoolClientId;
-      final logoutUri = 'musclemirror://logout';
-      final domain = AppConfig.cognitoDomain;
-      
-      final logoutUrlStr = 'https://$domain/logout?client_id=$clientId&logout_uri=$logoutUri';
-      final logoutUrl = Uri.parse(logoutUrlStr);
-      
-      // Use flutter_web_auth_2 to perform logout then capture the redirect and close
-      try {
-        await FlutterWebAuth2.authenticate(
-          url: logoutUrl.toString(),
-          callbackUrlScheme: 'musclemirror',
-          options: const FlutterWebAuth2Options(
-            intentFlags: ephemeralIntentFlags,
+    try {
+      final result = await Amplify.Auth.signIn(
+        username: normalizedEmail,
+        password: password,
+        options: const SignInOptions(
+          pluginOptions: CognitoSignInPluginOptions(
+            authFlowType: AuthenticationFlowType.userSrpAuth,
           ),
-        );
-      } catch (e) {
-        // flutter_web_auth_2 throws an exception if the user cancels or if it finishes
-        // Depending on how Cognito's logout works, it might just return cleanly or throw
-        print('Logout web auth message: $e');
-      }
-    }
-  }
-
-  /// Delete the current user's account.
-  Future<AuthResult> deleteAccount() async {
-    if (_cognitoUser == null || !isAuthenticated) {
-      return AuthResult.failure('ログインしていません');
-    }
-
-    try {
-      // 1. Delete user data on the server first (requires valid token)
-      final billingApiClient = BillingApiClient();
-      await billingApiClient.deleteAccount();
-
-      // 2. Delete user from Cognito
-      await _cognitoUser!.deleteUser();
-      
-      _cognitoUser = null;
-      _session = null;
-      _authStateController.add(false);
-      return AuthResult.success();
-    } on CognitoClientException catch (e) {
-      if (e.code == 'NotAuthorizedException') {
-        return AuthResult.failure('セキュリティ保護のため、アカウント削除には再ログインが必要です。一度ログアウトしてから再度お試しください。');
-      }
-      return AuthResult.failure('アカウントの削除に失敗しました: ${e.message}');
-    } catch (e) {
-      return AuthResult.failure('アカウントの削除に失敗しました: $e');
-    }
-  }
-
-  /// Sign up with email and password.
-  /// User Pool is configured for email alias, so username must not be email format.
-  Future<AuthResult> signUp(String email, String password) async {
-    // Generate a unique username (User Pool uses email as alias)
-    final username = 'user_${DateTime.now().millisecondsSinceEpoch}';
-    try {
-      final userAttributes = [
-        AttributeArg(name: 'email', value: email),
-      ];
-      await _userPool.signUp(username, password, userAttributes: userAttributes);
-      return AuthResult.success(data: username); // Return generated username for confirmation
-    } on CognitoClientException catch (e) {
-      if (e.code == 'UsernameExistsException') {
-        return AuthResult.failure('このメールアドレスはすでに登録されています');
-      }
-      if (e.code == 'InvalidPasswordException') {
-        return AuthResult.failure('パスワードの形式が正しくありません（大文字・小文字・数字を含む8文字以上）');
-      }
-      return AuthResult.failure(e.message ?? '登録エラーが発生しました');
-    } catch (e) {
-      return AuthResult.failure('登録に失敗しました: $e');
-    }
-  }
-
-  /// Confirm sign up with verification code.
-  Future<AuthResult> confirmSignUp(String username, String code) async {
-    final cognitoUser = CognitoUser(username, _userPool);
-    try {
-      await cognitoUser.confirmRegistration(code);
-      return AuthResult.success();
-    } on CognitoClientException catch (e) {
-      if (e.code == 'CodeMismatchException') {
-        return AuthResult.failure('確認コードが正しくありません');
-      }
-      if (e.code == 'ExpiredCodeException') {
-        return AuthResult.failure('確認コードの有効期限が切れています。再送信してください');
-      }
-      return AuthResult.failure(e.message ?? '確認エラーが発生しました');
-    } catch (e) {
-      return AuthResult.failure('確認に失敗しました: $e');
-    }
-  }
-
-  /// Resend confirmation code.
-  Future<AuthResult> resendConfirmationCode(String username) async {
-    final cognitoUser = CognitoUser(username, _userPool);
-    try {
-      await cognitoUser.resendConfirmationCode();
-      return AuthResult.success();
-    } on CognitoClientException catch (e) {
-      return AuthResult.failure(e.message ?? '再送信エラーが発生しました');
-    } catch (e) {
-      return AuthResult.failure('再送信に失敗しました: $e');
-    }
-  }
-
-  /// Send password reset code to email.
-  Future<AuthResult> forgotPassword(String email) async {
-    final cognitoUser = CognitoUser(email, _userPool);
-    try {
-      await cognitoUser.forgotPassword();
-      return AuthResult.success();
-    } on CognitoClientException catch (e) {
-      if (e.code == 'UserNotFoundException') {
-        return AuthResult.failure('このメールアドレスは登録されていません');
-      }
-      if (e.code == 'LimitExceededException') {
-        return AuthResult.failure('試行回数が多すぎます。しばらく待ってから再度お試しください');
-      }
-      return AuthResult.failure(e.message ?? 'パスワードリセットの送信に失敗しました');
-    } catch (e) {
-      return AuthResult.failure('送信に失敗しました: $e');
-    }
-  }
-
-  /// Confirm new password with reset code.
-  Future<AuthResult> confirmForgotPassword(
-      String email, String code, String newPassword) async {
-    final cognitoUser = CognitoUser(email, _userPool);
-    try {
-      await cognitoUser.confirmPassword(code, newPassword);
-      return AuthResult.success();
-    } on CognitoClientException catch (e) {
-      if (e.code == 'CodeMismatchException') {
-        return AuthResult.failure('確認コードが正しくありません');
-      }
-      if (e.code == 'ExpiredCodeException') {
-        return AuthResult.failure('確認コードの有効期限が切れています。再度送信してください');
-      }
-      if (e.code == 'InvalidPasswordException') {
-        return AuthResult.failure('パスワードの形式が正しくありません（大文字・小文字・数字を含む8文字以上）');
-      }
-      return AuthResult.failure(e.message ?? 'パスワードの変更に失敗しました');
-    } catch (e) {
-      return AuthResult.failure('パスワードの変更に失敗しました: $e');
-    }
-  }
-
-  /// Sign in with Google.
-  Future<AuthResult> signInWithGoogle() async {
-    return _signInWithSocialProvider('Google');
-  }
-
-  /// Sign in with LINE.
-  Future<AuthResult> signInWithLine() async {
-    return _signInWithSocialProvider('LINE');
-  }
-
-  Future<AuthResult> _signInWithSocialProvider(String provider) async {
-    final domain = AppConfig.cognitoDomain;
-    final clientId = AppConfig.userPoolClientId;
-    final redirectUri = 'musclemirror://callback';
-    
-    final url = Uri.https(
-      domain,
-      '/oauth2/authorize',
-      {
-        'identity_provider': provider,
-        'redirect_uri': redirectUri,
-        'response_type': 'code',
-        'client_id': clientId,
-        'scope': 'openid profile',
-        'prompt': 'select_account',
-      },
-    );
-
-    try {
-      final result = await FlutterWebAuth2.authenticate(
-        url: url.toString(),
-        callbackUrlScheme: 'musclemirror',
-        options: const FlutterWebAuth2Options(
-          intentFlags: ephemeralIntentFlags,
         ),
       );
-      
-      // Parse the result string into a Uri
-      final resultUri = Uri.parse(result);
-      // Process the redirect
-      await _handleRedirect(resultUri);
-      
+
+      if (!result.isSignedIn) {
+        return AuthResult.failure('ログインを完了できませんでした');
+      }
+
+      await _refreshCachedSession(notify: true);
       return AuthResult.success();
+    } on AuthException catch (e) {
+      return AuthResult.failure(_mapAuthException(e));
     } catch (e) {
       return AuthResult.failure('ログインに失敗しました: $e');
     }
   }
 
-  Future<void> _handleRedirect(Uri uri) async {
-    final code = uri.queryParameters['code'];
-    if (code == null) return;
+  Future<void> signOut() async {
+    await _configure();
 
     try {
-      final tokenUrl = Uri.parse('https://${AppConfig.cognitoDomain}/oauth2/token');
-      final response = await http.post(
-        tokenUrl,
-        headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-        body: {
-          'grant_type': 'authorization_code',
-          'client_id': AppConfig.userPoolClientId,
-          'code': code,
-          'redirect_uri': 'musclemirror://callback',
-        },
+      await Amplify.Auth.signOut(
+        options: const SignOutOptions(globalSignOut: true),
       );
-
-      if (response.statusCode == 200) {
-        final data = json.decode(response.body);
-        final idToken = data['id_token'];
-        final accessToken = data['access_token'];
-        final refreshToken = data['refresh_token'];
-
-        // Create session and user
-        final cognitoIdToken = CognitoIdToken(idToken);
-        final cognitoAccessToken = CognitoAccessToken(accessToken);
-        final cognitoRefreshToken = CognitoRefreshToken(refreshToken);
-        
-        _session = CognitoUserSession(cognitoIdToken, cognitoAccessToken, refreshToken: cognitoRefreshToken);
-        _cognitoUser = CognitoUser(
-          cognitoIdToken.payload['email'] ?? cognitoIdToken.payload['sub'], 
-          _userPool,
-          signInUserSession: _session,
-        );
-        
-        _authStateController.add(true);
-      } else {
-        print('Token exchange failed: ${response.body}');
-      }
     } catch (e) {
-      print('Error during token exchange: $e');
+      debugPrint('AuthService: signOut failed: $e');
+    }
+
+    _clearCachedSession(notify: true);
+
+    try {
+      await BillingService().clearLocalEntitlements();
+    } catch (e) {
+      debugPrint(
+        'AuthService: failed to clear local entitlements on sign out: $e',
+      );
     }
   }
 
-  /// Try to restore session from stored credentials.
-  Future<bool> restoreSession() async {
-    // Note: In a real app, you would implement secure storage
-    // to persist and restore the session.
-    return false;
+  Future<AuthResult> signUp(String email, String password) async {
+    await _configure();
+    final normalizedEmail = email.trim().toLowerCase();
+    final username = 'user_${DateTime.now().millisecondsSinceEpoch}';
+
+    try {
+      await Amplify.Auth.signUp(
+        username: username,
+        password: password,
+        options: SignUpOptions(
+          userAttributes: {AuthUserAttributeKey.email: normalizedEmail},
+          pluginOptions: const CognitoSignUpPluginOptions(),
+        ),
+      );
+      return AuthResult.success(data: username);
+    } on AuthException catch (e) {
+      return AuthResult.failure(_mapAuthException(e));
+    } catch (e) {
+      return AuthResult.failure('新規登録に失敗しました: $e');
+    }
   }
 
-  /// Get user attributes.
+  Future<AuthResult> confirmSignUp(String username, String code) async {
+    await _configure();
+
+    try {
+      await Amplify.Auth.confirmSignUp(
+        username: username,
+        confirmationCode: code,
+      );
+      return AuthResult.success();
+    } on AuthException catch (e) {
+      return AuthResult.failure(_mapAuthException(e));
+    } catch (e) {
+      return AuthResult.failure('確認コードの検証に失敗しました: $e');
+    }
+  }
+
+  Future<AuthResult> resendConfirmationCode(String username) async {
+    await _configure();
+
+    try {
+      await Amplify.Auth.resendSignUpCode(username: username);
+      return AuthResult.success();
+    } on AuthException catch (e) {
+      return AuthResult.failure(_mapAuthException(e));
+    } catch (e) {
+      return AuthResult.failure('確認コードの再送に失敗しました: $e');
+    }
+  }
+
+  Future<AuthResult> forgotPassword(String email) async {
+    await _configure();
+    final normalizedEmail = email.trim().toLowerCase();
+
+    try {
+      await Amplify.Auth.resetPassword(username: normalizedEmail);
+      return AuthResult.success();
+    } on AuthException catch (e) {
+      return AuthResult.failure(_mapAuthException(e));
+    } catch (e) {
+      return AuthResult.failure('パスワードリセットに失敗しました: $e');
+    }
+  }
+
+  Future<AuthResult> confirmForgotPassword(
+    String email,
+    String code,
+    String newPassword,
+  ) async {
+    await _configure();
+    final normalizedEmail = email.trim().toLowerCase();
+
+    try {
+      await Amplify.Auth.confirmResetPassword(
+        username: normalizedEmail,
+        newPassword: newPassword,
+        confirmationCode: code,
+      );
+      return AuthResult.success();
+    } on AuthException catch (e) {
+      return AuthResult.failure(_mapAuthException(e));
+    } catch (e) {
+      return AuthResult.failure('パスワード再設定に失敗しました: $e');
+    }
+  }
+
+  Future<AuthResult> signInWithGoogle() async {
+    return _signInWithSocialProvider(AuthProvider.google);
+  }
+
+  Future<AuthResult> signInWithLine() async {
+    return _signInWithSocialProvider(const AuthProvider.custom('LINE'));
+  }
+
+  Future<AuthResult> _signInWithSocialProvider(AuthProvider provider) async {
+    await _configure();
+
+    try {
+      await Amplify.Auth.signOut();
+    } catch (_) {
+      // Ignore stale-session cleanup failures.
+    }
+
+    try {
+      final result = await Amplify.Auth.signInWithWebUI(
+        provider: provider,
+        options: const SignInWithWebUIOptions(
+          pluginOptions: CognitoSignInWithWebUIPluginOptions(
+            isPreferPrivateSession: false,
+          ),
+        ),
+      ).timeout(_socialLoginTimeout);
+
+      if (!result.isSignedIn) {
+        return AuthResult.failure('ソーシャルログインを完了できませんでした');
+      }
+
+      await _refreshCachedSession(notify: true);
+      return AuthResult.success();
+    } on UserCancelledException {
+      return AuthResult.failure('ログインをキャンセルしました');
+    } on TimeoutException {
+      return AuthResult.failure('ログインがタイムアウトしました。もう一度お試しください。');
+    } on AuthException catch (e) {
+      return AuthResult.failure(_mapAuthException(e));
+    } catch (e) {
+      return AuthResult.failure('ログインに失敗しました: $e');
+    }
+  }
+
+  Future<bool> restoreSession() async {
+    await _configure();
+    return _refreshCachedSession(notify: true);
+  }
+
+  Future<String?> getValidIdToken() async {
+    if (_isAuthenticated && _idToken != null && _idToken!.isNotEmpty) {
+      return _idToken;
+    }
+
+    final restored = await restoreSession();
+    if (!restored) {
+      return null;
+    }
+    return _idToken;
+  }
+
+  Future<String?> getBestEffortIdToken() async {
+    return getValidIdToken();
+  }
+
+  Future<AuthResult> deleteAccountFixed() async {
+    try {
+      final idToken = await getBestEffortIdToken();
+      if (idToken == null || idToken.isEmpty) {
+        return AuthResult.failure('ログイン状態を確認できませんでした。再ログイン後にもう一度お試しください。');
+      }
+
+      await BillingApiClient().deleteAccount(idToken: idToken);
+
+      try {
+        await Amplify.Auth.deleteUser();
+      } catch (e) {
+        debugPrint('AuthService: deleteUser skipped after backend delete: $e');
+      }
+
+      try {
+        await HistoryService.clearAll();
+      } catch (e) {
+        debugPrint('AuthService: failed to clear local history: $e');
+      }
+
+      try {
+        await BillingService().clearLocalEntitlements();
+      } catch (e) {
+        debugPrint('AuthService: failed to clear billing cache: $e');
+      }
+
+      _clearCachedSession(notify: true);
+      return AuthResult.success();
+    } catch (e) {
+      debugPrint('AuthService: deleteAccountFixed failed: $e');
+      return AuthResult.failure('アカウント削除に失敗しました: $e');
+    }
+  }
+
   Future<Map<String, String>> getUserAttributes() async {
-    if (_cognitoUser == null || !isAuthenticated) {
+    if (!_isAuthenticated) {
       return {};
     }
 
-    try {
-      final attributes = await _cognitoUser!.getUserAttributes();
-      if (attributes == null) return {};
+    await _configure();
 
-      final result = <String, String>{};
-      for (final attr in attributes) {
-        if (attr.name != null && attr.value != null) {
-          result[attr.name!] = attr.value!;
+    try {
+      final attributes = await Amplify.Auth.fetchUserAttributes();
+      return {
+        for (final attr in attributes) attr.userAttributeKey.key: attr.value,
+      };
+    } catch (e) {
+      debugPrint('AuthService: fetchUserAttributes failed: $e');
+      return {};
+    }
+  }
+
+  Future<bool> _refreshCachedSession({required bool notify}) async {
+    final wasAuthenticated = _isAuthenticated;
+    final previousIdToken = _idToken;
+
+    try {
+      final session = await Amplify.Auth.fetchAuthSession();
+      if (session is! CognitoAuthSession || !session.isSignedIn) {
+        _clearCachedSession(notify: notify && wasAuthenticated);
+        return false;
+      }
+
+      final tokens = session.userPoolTokensResult.valueOrNull;
+      if (tokens == null) {
+        _clearCachedSession(notify: notify && wasAuthenticated);
+        return false;
+      }
+
+      _accessToken = tokens.accessToken.raw;
+      _idToken = tokens.idToken.raw;
+      _currentUserId = _decodeJwtClaim(_idToken, 'sub');
+      _userEmail =
+          _decodeJwtClaim(_idToken, 'email') ??
+          await _loadEmailFromAttributes() ??
+          await _loadUsername();
+      _isAuthenticated = true;
+
+      if (notify && (!wasAuthenticated || previousIdToken != _idToken)) {
+        _authStateController.add(true);
+      }
+      return true;
+    } catch (e) {
+      debugPrint('AuthService: session restoration failed: $e');
+      _clearCachedSession(notify: notify && wasAuthenticated);
+      return false;
+    }
+  }
+
+  Future<String?> _loadEmailFromAttributes() async {
+    try {
+      final attributes = await Amplify.Auth.fetchUserAttributes();
+      for (final attribute in attributes) {
+        if (attribute.userAttributeKey == AuthUserAttributeKey.email) {
+          return attribute.value;
         }
       }
-      return result;
     } catch (e) {
-      return {};
+      debugPrint('AuthService: email attribute lookup failed: $e');
     }
+    return null;
+  }
+
+  Future<String?> _loadUsername() async {
+    try {
+      final user = await Amplify.Auth.getCurrentUser();
+      return user.username;
+    } catch (e) {
+      debugPrint('AuthService: current user lookup failed: $e');
+      return null;
+    }
+  }
+
+  String? _decodeJwtClaim(String? token, String claim) {
+    if (token == null || token.isEmpty) {
+      return null;
+    }
+
+    try {
+      final parts = token.split('.');
+      if (parts.length < 2) {
+        return null;
+      }
+      final payload = utf8.decode(
+        base64Url.decode(base64Url.normalize(parts[1])),
+      );
+      final data = json.decode(payload) as Map<String, dynamic>;
+      final value = data[claim];
+      return value?.toString();
+    } catch (e) {
+      debugPrint('AuthService: failed to decode JWT claim "$claim": $e');
+      return null;
+    }
+  }
+
+  void _clearCachedSession({required bool notify}) {
+    _isAuthenticated = false;
+    _accessToken = null;
+    _idToken = null;
+    _userEmail = null;
+    _currentUserId = null;
+
+    if (notify) {
+      _authStateController.add(false);
+    }
+  }
+
+  String _mapAuthException(AuthException exception) {
+    final message = exception.message;
+
+    if (message.contains('Incorrect username or password') ||
+        message.contains('NotAuthorizedException')) {
+      return 'メールアドレスまたはパスワードが正しくありません';
+    }
+    if (message.contains('UserNotFoundException')) {
+      return 'このメールアドレスは登録されていません';
+    }
+    if (message.contains('UsernameExistsException')) {
+      return 'このメールアドレスは既に登録されています';
+    }
+    if (message.contains('InvalidPasswordException')) {
+      return 'パスワードの形式が正しくありません。英大文字・英小文字・数字を含む8文字以上で入力してください';
+    }
+    if (message.contains('InvalidParameterException') ||
+        message.contains('Invalid parameter') ||
+        message.contains('format')) {
+      return '入力形式が正しくありません。メールアドレスとパスワードを確認してください';
+    }
+    if (message.contains('CodeMismatchException')) {
+      return '確認コードが正しくありません';
+    }
+    if (message.contains('ExpiredCodeException')) {
+      return '確認コードの有効期限が切れています';
+    }
+    if (message.contains('LimitExceededException')) {
+      return '試行回数が上限に達しました。しばらく待ってから再度お試しください';
+    }
+    if (message.contains('UserNotConfirmedException')) {
+      return 'メール確認が完了していません';
+    }
+
+    return message.isEmpty ? '認証に失敗しました' : message;
   }
 }
 
-/// Result of an authentication operation.
 class AuthResult {
   final bool success;
   final String? errorMessage;
-  final String? data; // e.g., generated username returned from signUp
+  final String? data;
 
   AuthResult._({required this.success, this.errorMessage, this.data});
 
-  factory AuthResult.success({String? data}) => AuthResult._(success: true, data: data);
+  factory AuthResult.success({String? data}) =>
+      AuthResult._(success: true, data: data);
   factory AuthResult.failure(String message) =>
       AuthResult._(success: false, errorMessage: message);
 }

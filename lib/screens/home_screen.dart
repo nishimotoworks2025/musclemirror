@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'dart:async';
 import '../main.dart';
 import '../models/muscle_data.dart';
 import 'overview_tab.dart';
@@ -13,6 +14,7 @@ import '../services/history_service.dart';
 import '../services/user_mode_service.dart';
 import '../services/usage_limit_service.dart';
 import '../services/billing_service.dart';
+import '../services/evaluation_mode_service.dart';
 import '../config/app_config.dart';
 import '../widgets/user_mode_indicator.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -31,26 +33,61 @@ class _HomeScreenState extends State<HomeScreen>
   List<MuscleEvaluation> _evaluationHistory = [];
   final UserModeService _userModeService = UserModeService();
   final UsageLimitService _usageLimitService = UsageLimitService();
-  final EvaluationType _evaluationType = EvaluationType.balanced;
+  final EvaluationModeService _evaluationModeService = EvaluationModeService();
+  EvaluationType _evaluationType = EvaluationType.balanced;
   int _remainingCount = 0;
+  bool _isStartingDiagnosis = false;
+  StreamSubscription<bool>? _authStateSubscription;
+  bool _servicesReady = false;
+  bool _hadAuthenticatedSession = false;
 
   @override
   void initState() {
     super.initState();
     _tabController = TabController(length: 4, vsync: this);
-    _userModeService.initialize();
+    _initializeServices();
     _userModeService.modeStream.listen((_) {
       if (mounted) {
         setState(() {});
         _updateRemainingCount();
       }
     });
+    _hadAuthenticatedSession = AuthService().isAuthenticated;
+    _authStateSubscription = AuthService().authStateChanges.listen((
+      isAuthenticated,
+    ) {
+      if (isAuthenticated) {
+        _hadAuthenticatedSession = true;
+      } else if (_hadAuthenticatedSession && mounted) {
+        Navigator.of(context).pushAndRemoveUntil(
+          MaterialPageRoute(builder: (_) => const LoginScreen()),
+          (route) => false,
+        );
+        return;
+      }
+
+      if (_servicesReady) {
+        _updateRemainingCount();
+      }
+    });
     _loadHistory();
-    _updateRemainingCount();
     WidgetsBinding.instance.addObserver(this);
   }
 
+  Future<void> _initializeServices() async {
+    try {
+      await _userModeService.initialize().timeout(const Duration(seconds: 10));
+    } catch (e) {
+      debugPrint('HomeScreen: Service initialization timed out or failed: $e');
+    }
+    _evaluationType = await _evaluationModeService.load();
+    _servicesReady = true;
+    await _updateRemainingCount();
+    if (mounted) setState(() {});
+  }
+
   Future<void> _updateRemainingCount() async {
+    if (!_servicesReady) return;
     final count = await _usageLimitService.getRemainingCount();
     if (mounted) setState(() => _remainingCount = count);
   }
@@ -73,6 +110,7 @@ class _HomeScreenState extends State<HomeScreen>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _authStateSubscription?.cancel();
     _tabController.dispose();
     super.dispose();
   }
@@ -82,6 +120,7 @@ class _HomeScreenState extends State<HomeScreen>
     if (state == AppLifecycleState.resumed && AuthService().isAuthenticated) {
       debugPrint('HomeScreen: App resumed, syncing subscription status...');
       BillingService().syncWithServer().then((_) {
+        _updateRemainingCount();
         if (mounted) setState(() {});
       });
     }
@@ -97,6 +136,14 @@ class _HomeScreenState extends State<HomeScreen>
       builder: (context) => _SettingsSheet(
         currentThemeModeIndex: appState.currentThemeModeIndex,
         onThemeModeChanged: appState.setThemeMode,
+        currentEvaluationType: _evaluationType,
+        onEvaluationTypeChanged: (type) async {
+          await _evaluationModeService.save(type);
+          if (!mounted) return;
+          setState(() {
+            _evaluationType = type;
+          });
+        },
         isPro: _userModeService.isPro,
         userMode: _userModeService.currentMode,
         onLogout: () async {
@@ -132,6 +179,7 @@ class _HomeScreenState extends State<HomeScreen>
           }
         },
         onDeleteAccount: () async {
+          await AuthService().restoreSession();
           final billingService = BillingService();
           await billingService.syncWithServer();
           if (!mounted) return;
@@ -141,24 +189,32 @@ class _HomeScreenState extends State<HomeScreen>
           final requiresCancellation = isProSub && planStatus != 'cancelled';
 
           if (requiresCancellation) {
-            await showDialog<void>(
+            bool? proceedAnyway = await showDialog<bool>(
               context: context,
               builder: (context) => AlertDialog(
-                title: const Text('解約手続きが必要です'),
+                title: const Text('解約手続きの確認'),
                 content: const Text(
-                  '現在は確認のみです。\\n'
-                  '解約手続きをしてください。\n\n'
-                  'サブスクリプションを解約するまで、アカウント削除は実行できません。',
+                  'Proプランの有効な定期購入が確認されました。\n\n'
+                  'アカウントを削除しても、ストア（Google Play）の定期購入は自動的に解約されません。\n'
+                  '削除後に課金が継続されるのを防ぐため、必ずストア設定から解約を行ってください。\n\n'
+                  'このままアカウント削除に進みますか？',
                 ),
                 actions: [
                   TextButton(
-                    onPressed: () => Navigator.pop(context),
-                    child: const Text('OK'),
+                    onPressed: () => Navigator.pop(context, false),
+                    child: const Text('戻る'),
+                  ),
+                  TextButton(
+                    onPressed: () => Navigator.pop(context, true),
+                    child: const Text(
+                      '削除に進む',
+                      style: TextStyle(color: Colors.red),
+                    ),
                   ),
                 ],
               ),
             );
-            return;
+            if (proceedAnyway != true) return;
           }
 
           final confirm = await showDialog<bool>(
@@ -217,7 +273,7 @@ class _HomeScreenState extends State<HomeScreen>
           );
 
           if (confirm == true) {
-            final result = await AuthService().deleteAccount();
+            final result = await AuthService().deleteAccountFixed();
             if (mounted) {
               if (result.success) {
                 Navigator.of(context).pushAndRemoveUntil(
@@ -252,59 +308,79 @@ class _HomeScreenState extends State<HomeScreen>
   }
 
   Future<void> _startDiagnosis() async {
-    // Check usage limit
-    final canUse = await _usageLimitService.canUse();
-    if (!canUse) {
-      if (!mounted) return;
-      _showUsageLimitDialog();
-      return;
+    if (_isStartingDiagnosis) return;
+    if (mounted) {
+      setState(() {
+        _isStartingDiagnosis = true;
+      });
+    } else {
+      _isStartingDiagnosis = true;
     }
 
-    final result = await Navigator.of(context).push<MuscleEvaluation>(
-      MaterialPageRoute(
-        builder: (_) => DiagnosisScreen(
-          evaluationType: _evaluationType,
-          isPro: _userModeService.isPro || _userModeService.isGuest,
+    try {
+      // Check usage limit
+      final canUse = await _usageLimitService.canUse();
+      if (!canUse) {
+        if (!mounted) return;
+        _showUsageLimitDialog();
+        return;
+      }
+
+      final billingService = BillingService();
+      final usingTicketForDiagnosis =
+          !_userModeService.hasActiveSubscription && _userModeService.hasTicket;
+      final runAsPro = _userModeService.isPro || usingTicketForDiagnosis;
+
+      final result = await Navigator.of(context).push<MuscleEvaluation>(
+        MaterialPageRoute(
+          builder: (_) =>
+              DiagnosisScreen(evaluationType: _evaluationType, isPro: runAsPro),
+          fullscreenDialog: true,
         ),
-        fullscreenDialog: true,
-      ),
-    );
+      );
 
-    if (result != null) {
-      if (!mounted) return;
+      if (result != null) {
+        if (!mounted) return;
 
-      // Consume a ticket if the user is relying on it
-      // The user is relying on a ticket if they are in Pro mode but do not have an active subscription
-      bool ticketConsumed = false;
-      if (_userModeService.isPro) {
-        final billingService = BillingService();
-        if (!billingService.hasActiveSubscription &&
-            billingService.ticketCount > 0) {
-          await billingService.consumeTicket();
-          ticketConsumed = true;
+        // Consume a ticket if the user is relying on it
+        // The user is relying on a ticket if they do not have an active subscription but have tickets
+        bool ticketConsumed = false;
+        if (usingTicketForDiagnosis) {
+          // Check if the result was actually a Pro evaluation
+          if (result.isPro) {
+            await billingService.consumeTicket();
+            ticketConsumed = true;
+          }
         }
+
+        // Record usage after successful diagnosis
+        await _usageLimitService.recordUse(wasTicket: ticketConsumed);
+
+        // Ensure the saved evaluation carries the correct Pro flags
+        final evaluatedResult = result.copyWith(
+          isPro: result.isPro || ticketConsumed,
+        );
+
+        setState(() {
+          _currentEvaluation = evaluatedResult;
+          _evaluationHistory.add(evaluatedResult);
+          _tabController.animateTo(0);
+        });
+
+        // Save newly added evaluation
+        await HistoryService.saveEvaluations(_evaluationHistory);
+
+        // Update usage limit status
+        _updateRemainingCount();
       }
-
-      // Record usage after successful diagnosis (only if ticket was not used, to save their free trial)
-      if (!ticketConsumed) {
-        await _usageLimitService.recordUse();
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isStartingDiagnosis = false;
+        });
+      } else {
+        _isStartingDiagnosis = false;
       }
-
-      setState(() {
-        _currentEvaluation = result;
-        _evaluationHistory.add(result);
-        _tabController.animateTo(0);
-      });
-
-      // Save newly added evaluation
-      await HistoryService.saveEvaluations(_evaluationHistory);
-
-      // Update remaining count
-      await _updateRemainingCount();
-
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('判定が完了しました！')));
     }
   }
 
@@ -382,25 +458,45 @@ class _HomeScreenState extends State<HomeScreen>
         );
         break;
       case UserMode.pro:
+        final hasSub = BillingService().hasActiveSubscription;
         showDialog(
           context: context,
           builder: (context) => AlertDialog(
-            title: const Row(
+            title: Row(
               children: [
-                Icon(Icons.info_outline, color: Colors.blue),
-                SizedBox(width: 8),
-                Text('本日の利用上限'),
+                Icon(
+                  hasSub ? Icons.info_outline : Icons.warning_amber,
+                  color: hasSub ? Colors.blue : Colors.orange,
+                ),
+                const SizedBox(width: 8),
+                Text(hasSub ? '本日の利用上限' : 'チケットがありません'),
               ],
             ),
-            content: const Text(
-              'Proプランの本日の判定回数（3回）に達しました。\n\n'
-              '明日になるとカウントがリセットされます。',
+            content: Text(
+              hasSub
+                  ? 'Proプランの本日の判定回数（3回）に達しました。\n\n'
+                        '明日になるとカウントがリセットされます。'
+                  : '使用可能なチケットがありません。\n\n'
+                        '新しくチケットを購入するか、Proプランを購読して利用してください。',
             ),
             actions: [
               TextButton(
                 onPressed: () => Navigator.pop(context),
                 child: const Text('OK'),
               ),
+              if (!hasSub)
+                FilledButton.icon(
+                  onPressed: () {
+                    Navigator.pop(context);
+                    Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (_) => const SubscriptionPage(),
+                      ),
+                    );
+                  },
+                  icon: const Icon(Icons.workspace_premium),
+                  label: const Text('プラン・チケット購入'),
+                ),
             ],
           ),
         );
@@ -473,6 +569,7 @@ class _HomeScreenState extends State<HomeScreen>
             userMode: _userModeService.currentMode,
           ),
           ProgressTab(
+            evaluation: _currentEvaluation,
             evaluations: _evaluationHistory,
             userMode: _userModeService.currentMode,
           ),
@@ -484,17 +581,38 @@ class _HomeScreenState extends State<HomeScreen>
         ],
       ),
       floatingActionButton: FloatingActionButton.extended(
-        onPressed: _startDiagnosis,
+        onPressed: _isStartingDiagnosis ? null : _startDiagnosis,
         icon: const Icon(Icons.camera_alt),
-        label: Text('判定する（残り$_remainingCount回）'),
+        label: Builder(
+          builder: (_) {
+            if (_isStartingDiagnosis) {
+              return const Text('起動中...');
+            }
+            // Hide count if the user is using a Pro ticket without an active subscription
+            if (!_userModeService.hasActiveSubscription &&
+                _userModeService.hasTicket) {
+              return const Text('判定する（チケット消費）');
+            }
+            return Text(
+              '判定する（$_remainingCount回 / ${_evaluationType.shortLabel}）',
+            );
+          },
+        ),
       ),
     );
   }
 }
 
-class _SettingsSheet extends StatelessWidget {
+class _SettingsSheet extends StatefulWidget {
+  static const List<EvaluationType> _supportedEvaluationTypes = [
+    EvaluationType.balanced,
+    EvaluationType.physique,
+  ];
+
   final int currentThemeModeIndex;
   final Future<void> Function(int) onThemeModeChanged;
+  final EvaluationType currentEvaluationType;
+  final Future<void> Function(EvaluationType) onEvaluationTypeChanged;
   final bool isPro;
   final UserMode userMode;
   final VoidCallback onLogout;
@@ -503,11 +621,26 @@ class _SettingsSheet extends StatelessWidget {
   const _SettingsSheet({
     required this.currentThemeModeIndex,
     required this.onThemeModeChanged,
+    required this.currentEvaluationType,
+    required this.onEvaluationTypeChanged,
     required this.isPro,
     required this.userMode,
     required this.onLogout,
     required this.onDeleteAccount,
   });
+
+  @override
+  State<_SettingsSheet> createState() => _SettingsSheetState();
+}
+
+class _SettingsSheetState extends State<_SettingsSheet> {
+  late EvaluationType _selectedEvaluationType;
+
+  @override
+  void initState() {
+    super.initState();
+    _selectedEvaluationType = widget.currentEvaluationType;
+  }
 
   Future<void> _openUrl(String url) async {
     final uri = Uri.parse(url);
@@ -536,10 +669,10 @@ class _SettingsSheet extends StatelessWidget {
             const SizedBox(height: 24),
 
             // Subscription Section
-            if (userMode != UserMode.guest) ...[
+            if (widget.userMode != UserMode.guest) ...[
               Text('サブスクリプション', style: theme.textTheme.titleMedium),
               const SizedBox(height: 12),
-              if (isPro)
+              if (widget.isPro)
                 Container(
                   padding: const EdgeInsets.all(16),
                   decoration: BoxDecoration(
@@ -648,10 +781,82 @@ class _SettingsSheet extends StatelessWidget {
                 ButtonSegment(value: 1, label: Text('ライト')),
                 ButtonSegment(value: 2, label: Text('ダーク')),
               ],
-              selected: {currentThemeModeIndex},
+              selected: {widget.currentThemeModeIndex},
               onSelectionChanged: (selected) {
-                onThemeModeChanged(selected.first);
+                widget.onThemeModeChanged(selected.first);
               },
+            ),
+
+            const SizedBox(height: 32),
+
+            Text('判定モード', style: theme.textTheme.titleMedium),
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: _SettingsSheet._supportedEvaluationTypes.map((type) {
+                final selected = type == _selectedEvaluationType;
+                final isPhysique = type == EvaluationType.physique;
+                final accent = isPhysique
+                    ? const Color(0xFFB23A48)
+                    : theme.colorScheme.primary;
+                return ChoiceChip(
+                  label: Text(type.label),
+                  selected: selected,
+                  onSelected: (_) async {
+                    if (_selectedEvaluationType == type) return;
+                    setState(() {
+                      _selectedEvaluationType = type;
+                    });
+                    await widget.onEvaluationTypeChanged(type);
+                  },
+                  avatar: isPhysique
+                      ? const Icon(Icons.bolt, size: 18, color: Colors.white)
+                      : null,
+                  selectedColor: accent,
+                  labelStyle: TextStyle(
+                    color: selected ? Colors.white : accent,
+                    fontWeight: selected ? FontWeight.bold : FontWeight.w500,
+                  ),
+                  side: BorderSide(color: accent.withAlpha(120)),
+                  backgroundColor: accent.withAlpha(18),
+                );
+              }).toList(),
+            ),
+            const SizedBox(height: 12),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: _selectedEvaluationType == EvaluationType.physique
+                    ? const Color(0xFFB23A48).withAlpha(18)
+                    : theme.colorScheme.surfaceContainerHighest.withAlpha(120),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                  color: _selectedEvaluationType == EvaluationType.physique
+                      ? const Color(0xFFB23A48).withAlpha(130)
+                      : theme.colorScheme.outlineVariant,
+                ),
+              ),
+              child: Row(
+                children: [
+                  Icon(
+                    _selectedEvaluationType == EvaluationType.physique
+                        ? Icons.local_fire_department
+                        : Icons.tune,
+                    color: _selectedEvaluationType == EvaluationType.physique
+                        ? const Color(0xFFB23A48)
+                        : theme.colorScheme.primary,
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      _selectedEvaluationType.description,
+                      style: theme.textTheme.bodyMedium,
+                    ),
+                  ),
+                ],
+              ),
             ),
 
             const SizedBox(height: 32),
@@ -660,7 +865,7 @@ class _SettingsSheet extends StatelessWidget {
             SizedBox(
               width: double.infinity,
               child: OutlinedButton.icon(
-                onPressed: onLogout,
+                onPressed: widget.onLogout,
                 icon: const Icon(Icons.logout),
                 label: const Text('ログアウト'),
                 style: OutlinedButton.styleFrom(
@@ -677,7 +882,7 @@ class _SettingsSheet extends StatelessWidget {
             SizedBox(
               width: double.infinity,
               child: TextButton.icon(
-                onPressed: onDeleteAccount,
+                onPressed: widget.onDeleteAccount,
                 icon: const Icon(Icons.delete_outline, color: Colors.redAccent),
                 label: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,

@@ -1,11 +1,11 @@
 import 'dart:io';
 import 'dart:typed_data';
-import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:image/image.dart' as img;
 import 'package:image_picker/image_picker.dart';
 import 'package:path_provider/path_provider.dart';
 import '../models/muscle_data.dart';
+import '../services/billing_service.dart';
 import '../services/gemini_service.dart';
 import '../theme/app_theme.dart';
 import 'camera_capture_screen.dart';
@@ -38,6 +38,10 @@ class _DiagnosisScreenState extends State<DiagnosisScreen>
   late AnimationController _animationController;
   
   PreCheckResult? _preCheckResult;
+
+  bool get _isPhysiqueMode => widget.evaluationType == EvaluationType.physique;
+  Color get _modeAccent =>
+      _isPhysiqueMode ? const Color(0xFFB23A48) : AppTheme.brandBlue;
 
   @override
   void initState() {
@@ -248,29 +252,62 @@ class _DiagnosisScreenState extends State<DiagnosisScreen>
         debugPrint('Failed to save image: $e');
       }
 
-      final evaluation = await _geminiService.evaluate(
-        imageBytes: _imageBytes!,
-        evaluationType: widget.evaluationType,
-        isPro: widget.isPro,
-      );
+      late MuscleEvaluation evaluation;
+      var evaluatedAsPro = widget.isPro;
 
+      try {
+        evaluation = await _geminiService.evaluate(
+          imageBytes: _imageBytes!,
+          evaluationType: widget.evaluationType,
+          isPro: widget.isPro,
+        );
+      } on ProExpiredException catch (e) {
+        // IDトークンの有効期限切れや未認証エラー
+        debugPrint('DiagnosisScreen: Auth error during diagnosis: $e');
+        
+        if (widget.isPro) {
+          debugPrint('DiagnosisScreen: Attempting status sync before considering downgrade...');
+          // syncWithServer内でgetValidIdToken()が呼ばれるため、一時的な有効期限切れならここで解消される
+          await BillingService().syncWithServer();
+          
+          if (!BillingService().hasActiveSubscription) {
+            debugPrint('DiagnosisScreen: Server confirmed Pro expired. Downgrading.');
+            evaluatedAsPro = false;
+            if (mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('Proプランの有効期限が切れたため、無料モードで実行します')),
+              );
+            }
+            
+            // Retry as Free
+            evaluation = await _geminiService.evaluate(
+              imageBytes: _imageBytes!,
+              evaluationType: widget.evaluationType,
+              isPro: false,
+            );
+          } else {
+            debugPrint('DiagnosisScreen: Auth successfully refreshed via sync. Retrying evaluate...');
+            // Retry once with the refreshed session
+            evaluation = await _geminiService.evaluate(
+              imageBytes: _imageBytes!,
+              evaluationType: widget.evaluationType,
+              isPro: true,
+            );
+          }
+        } else {
+          rethrow;
+        }
+      }
+
+      final evaluationToReturn = evaluation.copyWith(
+        imagePath: savedImagePath ?? evaluation.imagePath,
+        isPro: evaluatedAsPro,
+      );
+      
       if (!mounted) return;
       
-      // Navigate to results
-      Navigator.of(context).pushReplacement(
-        MaterialPageRoute(
-          builder: (_) => 
-              // Assuming you have a result screen like TrueSkin
-              // ResultScreen(evaluation: evaluation)
-              // Or you go back to overview and pass the result
-              Scaffold(
-                appBar: AppBar(title: const Text('判定完了')),
-                body: const Center(child: Text('判定結果を表示する画面へ遷移します...')),
-              ),
-        ),
-      );
       // Let's actually pop and return the evaluation to the caller (HomeScreen)
-      Navigator.of(context).pop(evaluation);
+      Navigator.of(context).pop(evaluationToReturn);
 
     } catch (e) {
       if (!mounted) return;
@@ -291,7 +328,29 @@ class _DiagnosisScreenState extends State<DiagnosisScreen>
     
     return Scaffold(
       appBar: AppBar(
-        title: const Text('筋肉判定'),
+        title: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text('筋肉判定'),
+            const SizedBox(width: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+              decoration: BoxDecoration(
+                color: _modeAccent.withAlpha(28),
+                borderRadius: BorderRadius.circular(999),
+                border: Border.all(color: _modeAccent.withAlpha(120)),
+              ),
+              child: Text(
+                widget.evaluationType.shortLabel,
+                style: TextStyle(
+                  color: _modeAccent,
+                  fontSize: 12,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+          ],
+        ),
         leading: IconButton(
           icon: const Icon(Icons.close),
           onPressed: () => Navigator.of(context).pop(),
@@ -412,7 +471,7 @@ class _DiagnosisScreenState extends State<DiagnosisScreen>
                             decoration: BoxDecoration(
                               shape: BoxShape.circle,
                               border: Border.all(
-                                color: AppTheme.brandBlue.withOpacity(1.0 - progress),
+                                color: _modeAccent.withOpacity(1.0 - progress),
                                 width: 3,
                               ),
                             ),
@@ -427,7 +486,7 @@ class _DiagnosisScreenState extends State<DiagnosisScreen>
                             decoration: BoxDecoration(
                               shape: BoxShape.circle,
                               border: Border.all(
-                                color: AppTheme.brandBlue.withOpacity(1.0 - (progress + 0.33) % 1.0),
+                                color: _modeAccent.withOpacity(1.0 - (progress + 0.33) % 1.0),
                                 width: 2,
                               ),
                             ),
@@ -443,9 +502,9 @@ class _DiagnosisScreenState extends State<DiagnosisScreen>
                               shape: BoxShape.circle,
                               gradient: SweepGradient(
                                 colors: [
-                                  AppTheme.brandBlue.withOpacity(0.0),
-                                  AppTheme.brandBlue.withOpacity(0.8),
-                                  AppTheme.brandBlue.withOpacity(0.0),
+                                  _modeAccent.withOpacity(0.0),
+                                  _modeAccent.withOpacity(0.8),
+                                  _modeAccent.withOpacity(0.0),
                                 ],
                               ),
                             ),
@@ -484,7 +543,7 @@ class _DiagnosisScreenState extends State<DiagnosisScreen>
                             width: 8,
                             height: 8,
                             decoration: BoxDecoration(
-                              color: AppTheme.brandBlue,
+                              color: _modeAccent,
                               shape: BoxShape.circle,
                             ),
                           ),

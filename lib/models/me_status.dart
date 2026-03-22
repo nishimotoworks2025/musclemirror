@@ -1,3 +1,5 @@
+import '../services/billing_service.dart';
+
 /// Server-side user status model (ported from TrueSkin).
 /// Represents the response from the /me API endpoint.
 class MeStatus {
@@ -47,7 +49,9 @@ class MeStatus {
   }
 
   bool get hasProEntitlement {
-    final isProPlan = planTier == 'pro' || effectivePlan == 'pro';
+    final isProPlan = planTier.toLowerCase() == 'pro' || 
+                      effectivePlan.toLowerCase() == 'pro' ||
+                      ProductIds.subscriptions.contains(effectivePlan.toLowerCase());
     if (!isProPlan) {
       return false;
     }
@@ -57,6 +61,11 @@ class MeStatus {
     }
 
     if (_terminalPlanStatuses.contains(planStatus)) {
+      return false;
+    }
+
+    // Cancellation should only preserve Pro while a future expiry is known.
+    if (planStatus == 'cancelled' && expiresAtDate == null) {
       return false;
     }
 

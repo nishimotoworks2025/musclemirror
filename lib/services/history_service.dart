@@ -49,4 +49,10 @@ class HistoryService {
       await saveEvaluations(current);
     }
   }
+
+  /// Clear all local evaluation history.
+  static Future<void> clearAll() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_storageKey);
+  }
 }

@@ -1,6 +1,6 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import '../services/user_mode_service.dart';
-import '../services/auth_service.dart';
 import '../screens/login_screen.dart';
 import '../screens/subscription_page.dart';
 
@@ -12,10 +12,7 @@ import '../screens/subscription_page.dart';
 class UserModeIndicator extends StatefulWidget {
   final VoidCallback? onProTap;
 
-  const UserModeIndicator({
-    super.key,
-    this.onProTap,
-  });
+  const UserModeIndicator({super.key, this.onProTap});
 
   @override
   State<UserModeIndicator> createState() => _UserModeIndicatorState();
@@ -23,29 +20,35 @@ class UserModeIndicator extends StatefulWidget {
 
 class _UserModeIndicatorState extends State<UserModeIndicator> {
   final UserModeService _userModeService = UserModeService();
-  final AuthService _authService = AuthService();
+  StreamSubscription<UserMode>? _modeSubscription;
 
   @override
   void initState() {
     super.initState();
-    _userModeService.modeStream.listen((_) {
+    _modeSubscription = _userModeService.modeStream.listen((_) {
       if (mounted) setState(() {});
     });
   }
 
+  @override
+  void dispose() {
+    _modeSubscription?.cancel();
+    super.dispose();
+  }
+
   void _handleTap() {
     final mode = _userModeService.currentMode;
-    
+
     switch (mode) {
       case UserMode.guest:
-        Navigator.of(context).push(
-          MaterialPageRoute(builder: (_) => const LoginScreen()),
-        );
+        Navigator.of(
+          context,
+        ).push(MaterialPageRoute(builder: (_) => const LoginScreen()));
         break;
       case UserMode.free:
-        Navigator.of(context).push(
-          MaterialPageRoute(builder: (_) => const SubscriptionPage()),
-        );
+        Navigator.of(
+          context,
+        ).push(MaterialPageRoute(builder: (_) => const SubscriptionPage()));
         break;
       case UserMode.pro:
         widget.onProTap?.call();
@@ -56,12 +59,8 @@ class _UserModeIndicatorState extends State<UserModeIndicator> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final mode = _userModeService.currentMode;
-    
-    // Determine actual auth state (for guest detection)
-    final isAuthenticated = _authService.isAuthenticated;
-    final displayMode = isAuthenticated ? mode : UserMode.guest;
-    
+    final displayMode = _userModeService.currentMode;
+
     Color backgroundColor;
     Color textColor;
     IconData icon;
@@ -95,10 +94,7 @@ class _UserModeIndicatorState extends State<UserModeIndicator> {
         decoration: BoxDecoration(
           color: backgroundColor,
           borderRadius: BorderRadius.circular(24),
-          border: Border.all(
-            color: textColor.withAlpha(180),
-            width: 2,
-          ),
+          border: Border.all(color: textColor.withAlpha(180), width: 2),
           boxShadow: [
             BoxShadow(
               color: backgroundColor.withAlpha(100),

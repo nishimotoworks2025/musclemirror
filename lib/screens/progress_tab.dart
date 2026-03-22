@@ -1,16 +1,19 @@
-import 'package:flutter/material.dart';
 import 'package:fl_chart/fl_chart.dart';
+import 'package:flutter/material.dart';
+
 import '../models/muscle_data.dart';
 import '../services/user_mode_service.dart';
 import '../theme/app_theme.dart';
 import 'subscription_page.dart';
 
 class ProgressTab extends StatefulWidget {
+  final MuscleEvaluation? evaluation;
   final List<MuscleEvaluation> evaluations;
   final UserMode userMode;
 
   const ProgressTab({
     super.key,
+    this.evaluation,
     required this.evaluations,
     required this.userMode,
   });
@@ -24,13 +27,11 @@ class _ProgressTabState extends State<ProgressTab> {
 
   @override
   Widget build(BuildContext context) {
-    // Free: show Pro upsell overlay
-    if (widget.userMode == UserMode.free) {
-      return _ProgressProUpsell();
+    if (widget.evaluation == null || !widget.evaluation!.isPro) {
+      return const _ProgressProUpsell();
     }
 
     final proEvaluations = widget.evaluations.where((e) => e.isPro).toList();
-
     if (proEvaluations.isEmpty) {
       return const Center(
         child: Column(
@@ -38,10 +39,10 @@ class _ProgressTabState extends State<ProgressTab> {
           children: [
             Icon(Icons.timeline_outlined, size: 64, color: Colors.grey),
             SizedBox(height: 16),
-            Text('Pro判定の履歴がありません', style: TextStyle(color: Colors.grey)),
+            Text('Pro履歴がありません', style: TextStyle(color: Colors.grey)),
             SizedBox(height: 8),
             Text(
-              '複数回のPro判定で進捗を追跡できます',
+              '複数回のPro判定で進捗を確認できます。',
               style: TextStyle(color: Colors.grey, fontSize: 12),
             ),
           ],
@@ -57,19 +58,14 @@ class _ProgressTabState extends State<ProgressTab> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Progress Comment (NEW)
           Text('進捗コメント', style: theme.textTheme.titleLarge),
           const SizedBox(height: 16),
           _ProgressCommentCard(comment: latestEval.progressComment),
           const SizedBox(height: 24),
-
-          // Total Score Trend
           Text('総合スコア推移', style: theme.textTheme.titleLarge),
           const SizedBox(height: 16),
           _ScoreTrendCard(evaluations: proEvaluations),
           const SizedBox(height: 24),
-
-          // Part Selector
           Text('部位別推移', style: theme.textTheme.titleLarge),
           const SizedBox(height: 12),
           _PartSelector(
@@ -78,35 +74,28 @@ class _ProgressTabState extends State<ProgressTab> {
               setState(() => _selectedPart = part);
             },
           ),
-          const SizedBox(height: 16),
-          if (_selectedPart != null)
+          if (_selectedPart != null) ...[
+            const SizedBox(height: 16),
             _PartTrendCard(
               evaluations: proEvaluations,
               part: _selectedPart!,
             ),
+          ],
           const SizedBox(height: 24),
-
-          // Growth Ranking
-          Text('最近伸びた部位', style: theme.textTheme.titleLarge),
+          Text('最も伸びた部位', style: theme.textTheme.titleLarge),
           const SizedBox(height: 16),
           _GrowthRankingCard(evaluation: latestEval),
           const SizedBox(height: 24),
-
-          // High Score Parts
-          Text('点数が高い部位', style: theme.textTheme.titleLarge),
+          Text('高スコア部位', style: theme.textTheme.titleLarge),
           const SizedBox(height: 16),
           _HighScorePartsCard(evaluation: latestEval),
           const SizedBox(height: 24),
-
-          // Low Score Parts
-          Text('点数が低い部位', style: theme.textTheme.titleLarge),
+          Text('低スコア部位', style: theme.textTheme.titleLarge),
           const SizedBox(height: 16),
           _LowScorePartsCard(evaluation: latestEval),
-
-          // Next Step Hint
           const SizedBox(height: 24),
           _NextStepCard(evaluation: latestEval),
-          const SizedBox(height: 80), // FAB space
+          const SizedBox(height: 80),
         ],
       ),
     );
@@ -122,19 +111,54 @@ class _ScoreTrendCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
-
-    // Generate mock weekly data if we only have one evaluation
-    final spots = evaluations.length >= 2
-        ? evaluations.asMap().entries.map((e) {
-            return FlSpot(e.key.toDouble(), e.value.totalScore);
-          }).toList()
+    final chartEvaluations = evaluations.length >= 2
+        ? evaluations
         : [
-            FlSpot(0, evaluations.first.totalScore * 0.85),
-            FlSpot(1, evaluations.first.totalScore * 0.90),
-            FlSpot(2, evaluations.first.totalScore * 0.88),
-            FlSpot(3, evaluations.first.totalScore * 0.95),
-            FlSpot(4, evaluations.first.totalScore),
+            evaluations.first.copyWith(
+              evaluatedAt: evaluations.first.evaluatedAt.subtract(
+                const Duration(days: 28),
+              ),
+              evaluationType: evaluations.first.evaluationType,
+            ),
+            evaluations.first.copyWith(
+              evaluatedAt: evaluations.first.evaluatedAt.subtract(
+                const Duration(days: 21),
+              ),
+              overallMetrics: OverallMetrics(
+                volume: evaluations.first.overallMetrics.volume * 0.9,
+                definition: evaluations.first.overallMetrics.definition * 0.9,
+                balance: evaluations.first.overallMetrics.balance * 0.9,
+                leanness: evaluations.first.overallMetrics.leanness * 0.9,
+                posture: evaluations.first.overallMetrics.posture * 0.95,
+              ),
+            ),
+            evaluations.first.copyWith(
+              evaluatedAt: evaluations.first.evaluatedAt.subtract(
+                const Duration(days: 14),
+              ),
+              overallMetrics: OverallMetrics(
+                volume: evaluations.first.overallMetrics.volume * 0.92,
+                definition: evaluations.first.overallMetrics.definition * 0.88,
+                balance: evaluations.first.overallMetrics.balance * 0.9,
+                leanness: evaluations.first.overallMetrics.leanness * 0.93,
+                posture: evaluations.first.overallMetrics.posture * 0.96,
+              ),
+            ),
+            evaluations.first.copyWith(
+              evaluatedAt: evaluations.first.evaluatedAt.subtract(
+                const Duration(days: 7),
+              ),
+              overallMetrics: OverallMetrics(
+                volume: evaluations.first.overallMetrics.volume * 0.96,
+                definition: evaluations.first.overallMetrics.definition * 0.95,
+                balance: evaluations.first.overallMetrics.balance * 0.95,
+                leanness: evaluations.first.overallMetrics.leanness * 0.96,
+                posture: evaluations.first.overallMetrics.posture * 0.98,
+              ),
+            ),
+            evaluations.first,
           ];
+    final lineBars = _buildModeTrendLines(chartEvaluations, theme.cardColor);
 
     return Card(
       child: Padding(
@@ -147,7 +171,7 @@ class _ScoreTrendCard extends StatelessWidget {
                 show: true,
                 drawVerticalLine: false,
                 horizontalInterval: 2,
-                getDrawingHorizontalLine: (value) => FlLine(
+                getDrawingHorizontalLine: (_) => FlLine(
                   color: isDark ? Colors.white12 : Colors.black12,
                   strokeWidth: 1,
                 ),
@@ -173,7 +197,7 @@ class _ScoreTrendCard extends StatelessWidget {
                     reservedSize: 24,
                     interval: 1,
                     getTitlesWidget: (value, meta) {
-                      final weekLabels = ['1週', '2週', '3週', '4週', '5週'];
+                      const weekLabels = ['1週', '2週', '3週', '4週', '5週'];
                       final idx = value.toInt();
                       if (idx >= 0 && idx < weekLabels.length) {
                         return Text(
@@ -188,41 +212,87 @@ class _ScoreTrendCard extends StatelessWidget {
                     },
                   ),
                 ),
-                rightTitles: const AxisTitles(
-                  sideTitles: SideTitles(showTitles: false),
-                ),
-                topTitles: const AxisTitles(
-                  sideTitles: SideTitles(showTitles: false),
-                ),
+                rightTitles:
+                    const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                topTitles:
+                    const AxisTitles(sideTitles: SideTitles(showTitles: false)),
               ),
               borderData: FlBorderData(show: false),
               minY: 0,
               maxY: 10,
-              lineBarsData: [
-                LineChartBarData(
-                  spots: spots,
-                  isCurved: true,
-                  color: AppTheme.brandBlue,
-                  barWidth: 3,
-                  dotData: FlDotData(
-                    show: true,
-                    getDotPainter: (spot, percent, barData, index) =>
-                        FlDotCirclePainter(
-                      radius: 4,
-                      color: AppTheme.brandBlue,
-                      strokeWidth: 2,
-                      strokeColor: theme.cardColor,
-                    ),
-                  ),
-                  belowBarData: BarAreaData(
-                    show: true,
-                    color: AppTheme.brandBlue.withAlpha(25),
-                  ),
-                ),
-              ],
+              lineBarsData: lineBars,
             ),
           ),
         ),
+      ),
+    );
+  }
+
+  List<LineChartBarData> _buildModeTrendLines(
+    List<MuscleEvaluation> values,
+    Color cardColor,
+  ) {
+    final segments = <LineChartBarData>[];
+    var currentSpots = <FlSpot>[];
+    EvaluationType? currentType;
+
+    for (var i = 0; i < values.length; i++) {
+      final evaluation = values[i];
+      final spot = FlSpot(i.toDouble(), evaluation.totalScore);
+      final type = evaluation.evaluationType;
+
+      if (currentType == null) {
+        currentType = type;
+        currentSpots.add(spot);
+        continue;
+      }
+
+      if (type == currentType) {
+        currentSpots.add(spot);
+        continue;
+      }
+
+      currentSpots.add(spot);
+      segments.add(_lineForType(currentSpots, currentType, cardColor));
+      currentType = type;
+      currentSpots = [
+        FlSpot((i - 1).toDouble(), values[i - 1].totalScore),
+        spot,
+      ];
+    }
+
+    if (currentType != null && currentSpots.isNotEmpty) {
+      segments.add(_lineForType(currentSpots, currentType, cardColor));
+    }
+
+    return segments;
+  }
+
+  LineChartBarData _lineForType(
+    List<FlSpot> spots,
+    EvaluationType type,
+    Color cardColor,
+  ) {
+    final color = type == EvaluationType.physique
+        ? const Color(0xFFB23A48)
+        : AppTheme.brandBlue;
+    return LineChartBarData(
+      spots: spots,
+      isCurved: true,
+      color: color,
+      barWidth: 3,
+      dotData: FlDotData(
+        show: true,
+        getDotPainter: (spot, percent, barData, index) => FlDotCirclePainter(
+          radius: 4,
+          color: color,
+          strokeWidth: 2,
+          strokeColor: cardColor,
+        ),
+      ),
+      belowBarData: BarAreaData(
+        show: true,
+        color: color.withAlpha(25),
       ),
     );
   }
@@ -244,15 +314,12 @@ class _PartSelector extends StatelessWidget {
       child: ListView(
         scrollDirection: Axis.horizontal,
         children: MusclePart.values.map((part) {
-          final isSelected = selectedPart == part;
           return Padding(
             padding: const EdgeInsets.only(right: 8),
             child: FilterChip(
               label: Text(part.japaneseName),
-              selected: isSelected,
-              onSelected: (selected) {
-                onPartSelected(selected ? part : null);
-              },
+              selected: selectedPart == part,
+              onSelected: (selected) => onPartSelected(selected ? part : null),
             ),
           );
         }).toList(),
@@ -274,35 +341,20 @@ class _PartTrendCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
-
-    // Get scores for the selected part
     final volumeSpots = <FlSpot>[];
     final definitionSpots = <FlSpot>[];
 
     for (var i = 0; i < evaluations.length; i++) {
       final partScore = evaluations[i].partScores.firstWhere(
         (s) => s.part == part,
-        orElse: () =>
-            const MusclePartScore(part: MusclePart.chest, volume: 0, definition: 0),
+        orElse: () => const MusclePartScore(
+          part: MusclePart.chest,
+          volume: 0,
+          definition: 0,
+        ),
       );
       volumeSpots.add(FlSpot(i.toDouble(), partScore.volume));
       definitionSpots.add(FlSpot(i.toDouble(), partScore.definition));
-    }
-
-    // If only one evaluation, generate mock trend
-    if (evaluations.length < 2) {
-      final score = evaluations.first.partScores.firstWhere(
-        (s) => s.part == part,
-        orElse: () =>
-            const MusclePartScore(part: MusclePart.chest, volume: 5, definition: 5),
-      );
-      volumeSpots.clear();
-      definitionSpots.clear();
-      for (var i = 0; i < 5; i++) {
-        volumeSpots.add(FlSpot(i.toDouble(), score.volume * (0.85 + i * 0.04)));
-        definitionSpots
-            .add(FlSpot(i.toDouble(), score.definition * (0.88 + i * 0.03)));
-      }
     }
 
     return Card(
@@ -311,10 +363,7 @@ class _PartTrendCard extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
-              '${part.japaneseName}の推移',
-              style: theme.textTheme.titleMedium,
-            ),
+            Text('${part.japaneseName}の推移', style: theme.textTheme.titleMedium),
             const SizedBox(height: 16),
             SizedBox(
               height: 180,
@@ -324,7 +373,7 @@ class _PartTrendCard extends StatelessWidget {
                     show: true,
                     drawVerticalLine: false,
                     horizontalInterval: 2,
-                    getDrawingHorizontalLine: (value) => FlLine(
+                    getDrawingHorizontalLine: (_) => FlLine(
                       color: isDark ? Colors.white12 : Colors.black12,
                       strokeWidth: 1,
                     ),
@@ -344,15 +393,12 @@ class _PartTrendCard extends StatelessWidget {
                         ),
                       ),
                     ),
-                    bottomTitles: const AxisTitles(
-                      sideTitles: SideTitles(showTitles: false),
-                    ),
-                    rightTitles: const AxisTitles(
-                      sideTitles: SideTitles(showTitles: false),
-                    ),
-                    topTitles: const AxisTitles(
-                      sideTitles: SideTitles(showTitles: false),
-                    ),
+                    bottomTitles:
+                        const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                    rightTitles:
+                        const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                    topTitles:
+                        const AxisTitles(sideTitles: SideTitles(showTitles: false)),
                   ),
                   borderData: FlBorderData(show: false),
                   minY: 0,
@@ -377,12 +423,12 @@ class _PartTrendCard extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 12),
-            Row(
+            const Row(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                _LegendItem(color: AppTheme.accentOrange, label: 'Volume'),
-                const SizedBox(width: 24),
-                _LegendItem(color: AppTheme.accentCyan, label: 'Definition'),
+                _LineLegendItem(color: AppTheme.accentOrange, label: 'Volume'),
+                SizedBox(width: 24),
+                _LineLegendItem(color: AppTheme.accentCyan, label: 'Definition'),
               ],
             ),
           ],
@@ -392,11 +438,14 @@ class _PartTrendCard extends StatelessWidget {
   }
 }
 
-class _LegendItem extends StatelessWidget {
+class _LineLegendItem extends StatelessWidget {
   final Color color;
   final String label;
 
-  const _LegendItem({required this.color, required this.label});
+  const _LineLegendItem({
+    required this.color,
+    required this.label,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -411,13 +460,7 @@ class _LegendItem extends StatelessWidget {
           ),
         ),
         const SizedBox(width: 6),
-        Text(
-          label,
-          style: TextStyle(
-            fontSize: 12,
-            color: Theme.of(context).textTheme.bodySmall?.color,
-          ),
-        ),
+        Text(label, style: Theme.of(context).textTheme.bodySmall),
       ],
     );
   }
@@ -431,44 +474,33 @@ class _GrowthRankingCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-
-    // Sort by overall score (simulating "growth")
     final sortedParts = List<MusclePartScore>.from(evaluation.partScores)
       ..sort((a, b) => b.overallScore.compareTo(a.overallScore));
-
-    final topParts = sortedParts.take(3).toList();
 
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
-          children: topParts.asMap().entries.map((entry) {
+          children: sortedParts.take(3).toList().asMap().entries.map((entry) {
             final rank = entry.key + 1;
             final score = entry.value;
-
             return Padding(
               padding: const EdgeInsets.symmetric(vertical: 8),
               child: Row(
                 children: [
-                  Container(
-                    width: 28,
-                    height: 28,
-                    decoration: BoxDecoration(
-                      color: rank == 1
-                          ? AppTheme.scoreExcellent
-                          : rank == 2
-                              ? AppTheme.scoreGood
-                              : AppTheme.scoreAverage,
-                      shape: BoxShape.circle,
-                    ),
-                    child: Center(
-                      child: Text(
-                        '$rank',
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontWeight: FontWeight.bold,
-                          fontSize: 14,
-                        ),
+                  CircleAvatar(
+                    radius: 14,
+                    backgroundColor: rank == 1
+                        ? AppTheme.scoreExcellent
+                        : rank == 2
+                            ? AppTheme.scoreGood
+                            : AppTheme.scoreAverage,
+                    child: Text(
+                      '$rank',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 14,
                       ),
                     ),
                   ),
@@ -481,7 +513,7 @@ class _GrowthRankingCard extends StatelessWidget {
                   ),
                   Text(
                     '+${(score.overallScore * 0.1).toStringAsFixed(1)}',
-                    style: TextStyle(
+                    style: const TextStyle(
                       color: AppTheme.scoreExcellent,
                       fontWeight: FontWeight.w600,
                     ),
@@ -504,44 +536,19 @@ class _HighScorePartsCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-
-    // Sort by overall score descending (highest first)
     final sortedParts = List<MusclePartScore>.from(evaluation.partScores)
       ..sort((a, b) => b.overallScore.compareTo(a.overallScore));
-
-    final topParts = sortedParts.take(3).toList();
 
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
-          children: topParts.asMap().entries.map((entry) {
-            final rank = entry.key + 1;
-            final score = entry.value;
-
+          children: sortedParts.take(3).map((score) {
             return Padding(
               padding: const EdgeInsets.symmetric(vertical: 8),
               child: Row(
                 children: [
-                  Container(
-                    width: 28,
-                    height: 28,
-                    decoration: BoxDecoration(
-                      color: rank == 1
-                          ? AppTheme.scoreExcellent
-                          : rank == 2
-                              ? AppTheme.scoreGood
-                              : AppTheme.scoreAverage,
-                      shape: BoxShape.circle,
-                    ),
-                    child: const Center(
-                      child: Icon(
-                        Icons.star,
-                        color: Colors.white,
-                        size: 16,
-                      ),
-                    ),
-                  ),
+                  const Icon(Icons.star, color: AppTheme.scoreExcellent),
                   const SizedBox(width: 16),
                   Expanded(
                     child: Text(
@@ -551,7 +558,7 @@ class _HighScorePartsCard extends StatelessWidget {
                   ),
                   Text(
                     score.overallScore.toStringAsFixed(1),
-                    style: TextStyle(
+                    style: const TextStyle(
                       color: AppTheme.scoreExcellent,
                       fontWeight: FontWeight.w600,
                       fontSize: 16,
@@ -575,39 +582,19 @@ class _LowScorePartsCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-
-    // Sort by overall score ascending (lowest first)
     final sortedParts = List<MusclePartScore>.from(evaluation.partScores)
       ..sort((a, b) => a.overallScore.compareTo(b.overallScore));
-
-    final bottomParts = sortedParts.take(3).toList();
 
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
-          children: bottomParts.asMap().entries.map((entry) {
-            final score = entry.value;
-
+          children: sortedParts.take(3).map((score) {
             return Padding(
               padding: const EdgeInsets.symmetric(vertical: 8),
               child: Row(
                 children: [
-                  Container(
-                    width: 28,
-                    height: 28,
-                    decoration: BoxDecoration(
-                      color: AppTheme.scorePoor,
-                      shape: BoxShape.circle,
-                    ),
-                    child: const Center(
-                      child: Icon(
-                        Icons.fitness_center,
-                        color: Colors.white,
-                        size: 14,
-                      ),
-                    ),
-                  ),
+                  const Icon(Icons.fitness_center, color: AppTheme.scorePoor),
                   const SizedBox(width: 16),
                   Expanded(
                     child: Text(
@@ -617,7 +604,7 @@ class _LowScorePartsCard extends StatelessWidget {
                   ),
                   Text(
                     score.overallScore.toStringAsFixed(1),
-                    style: TextStyle(
+                    style: const TextStyle(
                       color: AppTheme.scorePoor,
                       fontWeight: FontWeight.w600,
                       fontSize: 16,
@@ -641,9 +628,8 @@ class _NextStepCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final weakest = evaluation.weakPoints.isNotEmpty
-        ? evaluation.weakPoints.first
-        : MusclePart.abs;
+    final weakest =
+        evaluation.weakPoints.isNotEmpty ? evaluation.weakPoints.first : MusclePart.abs;
 
     return Card(
       color: AppTheme.brandBlue.withAlpha(25),
@@ -652,17 +638,14 @@ class _NextStepCard extends StatelessWidget {
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Icon(
-              Icons.arrow_forward_rounded,
-              color: AppTheme.brandBlue,
-            ),
+            const Icon(Icons.arrow_forward_rounded, color: AppTheme.brandBlue),
             const SizedBox(width: 12),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    '次の一手',
+                    '次の一歩',
                     style: theme.textTheme.titleSmall?.copyWith(
                       color: AppTheme.brandBlue,
                       fontWeight: FontWeight.w600,
@@ -670,7 +653,7 @@ class _NextStepCard extends StatelessWidget {
                   ),
                   const SizedBox(height: 4),
                   Text(
-                    '${weakest.japaneseName}の強化を優先することで、全体バランスの向上が期待できます。',
+                    '${weakest.japaneseName}の強化を意識すると、全身バランスの改善が期待できます。',
                     style: theme.textTheme.bodySmall,
                   ),
                 ],
@@ -691,8 +674,9 @@ class _ProgressCommentCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final value = comment ?? '';
 
-    if (comment == null || comment!.isEmpty) {
+    if (value.isEmpty) {
       return Card(
         child: Padding(
           padding: const EdgeInsets.all(20),
@@ -705,7 +689,7 @@ class _ProgressCommentCard extends StatelessWidget {
               const SizedBox(width: 12),
               Expanded(
                 child: Text(
-                  '進捗コメントがありません。複数回の判定で進捗分析が可能になります。',
+                  '進捗コメントがありません。複数回のPro判定で進捗分析が利用可能になります。',
                   style: theme.textTheme.bodyMedium?.copyWith(
                     color: theme.textTheme.bodyMedium?.color?.withAlpha(150),
                   ),
@@ -731,7 +715,7 @@ class _ProgressCommentCard extends StatelessWidget {
                     color: AppTheme.scoreExcellent.withAlpha(25),
                     borderRadius: BorderRadius.circular(8),
                   ),
-                  child: Icon(
+                  child: const Icon(
                     Icons.trending_up,
                     color: AppTheme.scoreExcellent,
                     size: 20,
@@ -748,10 +732,8 @@ class _ProgressCommentCard extends StatelessWidget {
             ),
             const SizedBox(height: 16),
             Text(
-              comment!,
-              style: theme.textTheme.bodyMedium?.copyWith(
-                height: 1.6,
-              ),
+              value,
+              style: theme.textTheme.bodyMedium?.copyWith(height: 1.6),
             ),
           ],
         ),
@@ -760,8 +742,9 @@ class _ProgressCommentCard extends StatelessWidget {
   }
 }
 
-/// Pro upsell overlay for the Progress tab.
 class _ProgressProUpsell extends StatelessWidget {
+  const _ProgressProUpsell();
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -772,7 +755,6 @@ class _ProgressProUpsell extends StatelessWidget {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            // Lock icon
             Container(
               width: 80,
               height: 80,
@@ -801,47 +783,43 @@ class _ProgressProUpsell extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 24),
-
             Text(
-              '進捗トラッキング — Pro限定',
+              '進捗トラッキング - Pro限定',
               style: theme.textTheme.headlineSmall?.copyWith(
                 fontWeight: FontWeight.bold,
               ),
               textAlign: TextAlign.center,
             ),
             const SizedBox(height: 12),
-
             Text(
-              'Proプランにアップグレードすると、以下の進捗管理機能が利用できます。',
+              'Proプランにアップグレードすると、過去の進捗確認機能が利用できます。',
               style: theme.textTheme.bodyMedium?.copyWith(
                 color: theme.textTheme.bodyMedium?.color?.withAlpha(180),
               ),
               textAlign: TextAlign.center,
             ),
             const SizedBox(height: 32),
-
-            // Feature list
-            ...[
-              _ProgressFeature(Icons.show_chart, '総合スコアの推移グラフ'),
-              _ProgressFeature(Icons.analytics, '部位別スコアの推移'),
-              _ProgressFeature(Icons.emoji_events, '成長ランキング'),
-              _ProgressFeature(Icons.insights, '進捗コメント・アドバイス'),
-              _ProgressFeature(Icons.arrow_forward_rounded, '次のトレーニング提案'),
-            ].map((f) => Padding(
-              padding: const EdgeInsets.symmetric(vertical: 6),
-              child: Row(
-                children: [
-                  Icon(f.icon, size: 20, color: theme.colorScheme.primary),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Text(f.text, style: theme.textTheme.bodyMedium),
-                  ),
-                ],
-              ),
-            )),
+            ...const [
+              (Icons.show_chart, '総合スコアの推移グラフ'),
+              (Icons.analytics, '部位別スコアの推移'),
+              (Icons.emoji_events, '成長ランキング'),
+              (Icons.insights, '進捗コメントのアドバイス'),
+              (Icons.arrow_forward_rounded, '次のトレーニング提案'),
+            ].map((item) {
+              return Padding(
+                padding: const EdgeInsets.symmetric(vertical: 6),
+                child: Row(
+                  children: [
+                    Icon(item.$1, size: 20, color: AppTheme.brandBlue),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Text(item.$2, style: theme.textTheme.bodyMedium),
+                    ),
+                  ],
+                ),
+              );
+            }),
             const SizedBox(height: 32),
-
-            // CTA Button
             SizedBox(
               width: double.infinity,
               child: FilledButton.icon(
@@ -852,12 +830,6 @@ class _ProgressProUpsell extends StatelessWidget {
                 },
                 icon: const Icon(Icons.workspace_premium),
                 label: const Text('Proプランにアップグレード'),
-                style: FilledButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(vertical: 16),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                ),
               ),
             ),
           ],
@@ -865,10 +837,4 @@ class _ProgressProUpsell extends StatelessWidget {
       ),
     );
   }
-}
-
-class _ProgressFeature {
-  final IconData icon;
-  final String text;
-  const _ProgressFeature(this.icon, this.text);
 }

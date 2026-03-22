@@ -3,9 +3,51 @@ library;
 
 /// Evaluation type (ideal body standard).
 enum EvaluationType {
+  physique,
   balanced,     // バランス重視
   muscleFocused, // 筋量重視
   leanFocused,  // 絞り重視
+}
+
+extension EvaluationTypeExtension on EvaluationType {
+  String get label {
+    switch (this) {
+      case EvaluationType.balanced:
+        return 'バランス';
+      case EvaluationType.muscleFocused:
+        return '筋量重視';
+      case EvaluationType.leanFocused:
+        return '絞り重視';
+      case EvaluationType.physique:
+        return 'フィジーク';
+    }
+  }
+
+  String get shortLabel {
+    switch (this) {
+      case EvaluationType.balanced:
+        return '標準';
+      case EvaluationType.muscleFocused:
+        return '筋量';
+      case EvaluationType.leanFocused:
+        return '絞り';
+      case EvaluationType.physique:
+        return 'PHYSIQUE';
+    }
+  }
+
+  String get description {
+    switch (this) {
+      case EvaluationType.balanced:
+        return '健康的で均整の取れた見え方を重視';
+      case EvaluationType.muscleFocused:
+        return 'サイズ感と厚みを優先して評価';
+      case EvaluationType.leanFocused:
+        return 'シャープさと絞りを優先して評価';
+      case EvaluationType.physique:
+        return '競技寄りの厳しめ基準で評価';
+    }
+  }
 }
 
 /// Pre-check result from Gemini 2.5 Flash-Lite.
@@ -52,7 +94,7 @@ class OverallMetrics {
     required this.posture,
   });
 
-  double get totalScore {
+  double get rawScore {
     // Weighted average: posture has lower weight
     const postureWeight = 0.5;
     const otherWeight = 1.0;
@@ -62,8 +104,10 @@ class OverallMetrics {
         (leanness * otherWeight) +
         (posture * postureWeight);
     final weightSum = (otherWeight * 4) + postureWeight;
-    final rawScore = total / weightSum;
-    
+    return total / weightSum;
+  }
+
+  double get totalScore {
     // Apply score boost for high scores (7.0+)
     // This compensates for Gemini's conservative scoring tendency
     return _boostHighScore(rawScore);
@@ -238,7 +282,13 @@ class MuscleEvaluation {
     this.isPro = false,
   });
 
-  double get totalScore => overallMetrics.totalScore;
+  double get totalScore {
+    if (evaluationType == EvaluationType.physique) {
+      final strictScore = overallMetrics.rawScore - 0.5;
+      return strictScore.clamp(0.0, 10.0);
+    }
+    return overallMetrics.totalScore;
+  }
 
   factory MuscleEvaluation.fromJson(Map<String, dynamic> json) {
     final partScoresJson = json['part_scores'] as List<dynamic>? ?? [];

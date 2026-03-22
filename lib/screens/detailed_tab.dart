@@ -1,4 +1,4 @@
-import 'dart:io';
+﻿import 'dart:io';
 import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import '../models/muscle_data.dart';
@@ -24,11 +24,9 @@ class DetailedTab extends StatefulWidget {
 class _DetailedTabState extends State<DetailedTab> {
   MusclePart? _selectedPart;
 
-  bool get _isPro => widget.userMode == UserMode.pro || widget.userMode == UserMode.guest;
-
   @override
   Widget build(BuildContext context) {
-    bool canViewDetails = _isPro || (widget.evaluation?.isPro == true);
+    bool canViewDetails = widget.evaluation?.isPro == true;
 
     // Free/Guest: show Pro upsell overlay if not in Pro mode AND the evaluation was not taken in Pro
     if (!canViewDetails) {
@@ -161,7 +159,7 @@ class _ProUpsellOverlay extends StatelessWidget {
 
             // Title
             Text(
-              '$title — Pro限定',
+              '$title - Pro限定',
               style: theme.textTheme.headlineSmall?.copyWith(
                 fontWeight: FontWeight.bold,
               ),
@@ -600,7 +598,7 @@ class _MuscleDetailedList extends StatelessWidget {
                                   ),
                                 ),
                                 Text(
-                                  'Vol: ${score.volume.toStringAsFixed(1)} / Def: ${score.definition.toStringAsFixed(1)}',
+                                  'ボリューム: ${score.volume.toStringAsFixed(1)} / ディフィニション: ${score.definition.toStringAsFixed(1)}',
                                   style: theme.textTheme.bodySmall?.copyWith(
                                     color: theme.textTheme.bodySmall?.color?.withAlpha(150),
                                   ),
@@ -697,21 +695,21 @@ class _PartDetailsCard extends StatelessWidget {
             const SizedBox(height: 24),
 
             // Score Breakdown
-            _ScoreBar(label: 'Volume', value: partScore.volume, maxValue: 10),
+            _ScoreBar(label: 'ボリューム', value: partScore.volume, maxValue: 10),
             const SizedBox(height: 12),
             _ScoreBar(
-                label: 'Definition', value: partScore.definition, maxValue: 10),
+                label: 'ディフィニション', value: partScore.definition, maxValue: 10),
 
             if (isPro) ...[
               const SizedBox(height: 12),
               _ScoreBar(
-                label: 'Symmetry',
+                label: '左右対称性',
                 value: partScore.symmetry ?? 0,
                 maxValue: 10,
               ),
               const SizedBox(height: 12),
               _ScoreBar(
-                label: 'Fat Appearance',
+                label: '脂肪の見た目',
                 value: partScore.fatAppearance ?? 0,
                 maxValue: 10,
                 inverted: true,

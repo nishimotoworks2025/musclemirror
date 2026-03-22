@@ -8,6 +8,7 @@ import 'auth_service.dart';
 /// API client for billing-related server endpoints (ported from TrueSkin).
 /// Handles purchase registration and user status retrieval.
 class BillingApiClient {
+  static const Duration _requestTimeout = Duration(seconds: 8);
   static final BillingApiClient _instance = BillingApiClient._internal();
   factory BillingApiClient() => _instance;
   BillingApiClient._internal();
@@ -19,8 +20,10 @@ class BillingApiClient {
   /// Register a Google Play purchase with the server.
   /// The server verifies the purchase with Google Play API and stores it in DynamoDB.
   Future<Map<String, dynamic>> registerPurchase(
-      String productId, String purchaseToken) async {
-    final idToken = _authService.idToken;
+    String productId,
+    String purchaseToken,
+  ) async {
+    final idToken = await _authService.getValidIdToken();
     if (idToken == null || idToken.isEmpty) {
       throw Exception('Authorization required');
     }
@@ -29,6 +32,7 @@ class BillingApiClient {
     final headers = {
       'Content-Type': 'application/json',
       'Authorization': 'Bearer $idToken',
+      'x-mm-id-token': idToken, // Fallback for SigV4 issues
     };
     final body = jsonEncode({
       'product_id': productId,
@@ -37,7 +41,9 @@ class BillingApiClient {
 
     debugPrint('[BillingApiClient] Registering purchase: $productId');
 
-    final response = await _client.post(uri, headers: headers, body: body);
+    final response = await _client
+        .post(uri, headers: headers, body: body)
+        .timeout(_requestTimeout);
 
     if (response.statusCode == 200 || response.statusCode == 201) {
       final dynamic decoded = jsonDecode(utf8.decode(response.bodyBytes));
@@ -72,20 +78,21 @@ class BillingApiClient {
 
   /// Fetch the current user's status from the server.
   /// Returns plan, remaining usage count, feature flags, etc.
-  Future<MeStatus> fetchMe() async {
-    final idToken = _authService.idToken;
-    if (idToken == null || idToken.isEmpty) {
-      throw Exception('Authorization required');
-    }
-
-    final uri = Uri.parse('$_baseUrl/me');
-    final headers = {
-      'Authorization': 'Bearer $idToken',
-    };
+  Future<MeStatus?> fetchMe() async {
+    final idToken = await _authService.getValidIdToken();
+    if (idToken == null) return null;
 
     debugPrint('[BillingApiClient] Fetching /me status');
 
-    final response = await _client.get(uri, headers: headers);
+    final response = await _client
+        .get(
+          Uri.parse('$_baseUrl/me'),
+          headers: {
+            'Authorization': 'Bearer $idToken',
+            'x-mm-id-token': idToken, // Fallback for SigV4 issues
+          },
+        )
+        .timeout(_requestTimeout);
 
     if (response.statusCode == 200) {
       final rawBody = utf8.decode(response.bodyBytes);
@@ -124,7 +131,8 @@ class BillingApiClient {
       return MeStatus.fromJson(json);
     } else {
       throw Exception(
-          'Failed to fetch me status: ${response.statusCode} ${response.body}');
+        'Failed to fetch me status: ${response.statusCode} ${response.body}',
+      );
     }
   }
 
@@ -132,23 +140,25 @@ class BillingApiClient {
   Future<int> fetchGuestUsage(String deviceId) async {
     final uri = Uri.parse('$_baseUrl/guest/usage');
     final headers = {'Content-Type': 'application/json'};
-    final body = jsonEncode({
-      'device_id': deviceId,
-      'action': 'get',
-    });
+    final body = jsonEncode({'device_id': deviceId, 'action': 'get'});
 
     debugPrint('[BillingApiClient] Fetching guest usage for device: $deviceId');
 
-    final response = await _client.post(uri, headers: headers, body: body);
+    final response = await _client
+        .post(uri, headers: headers, body: body)
+        .timeout(_requestTimeout);
 
     if (response.statusCode == 200) {
       final decoded = jsonDecode(utf8.decode(response.bodyBytes));
-      if (decoded is Map<String, dynamic> && decoded.containsKey('guestTotalUsedCount')) {
+      if (decoded is Map<String, dynamic> &&
+          decoded.containsKey('guestTotalUsedCount')) {
         return decoded['guestTotalUsedCount'] as int;
       }
       return 0;
     } else {
-      debugPrint('[BillingApiClient] Failed to fetch guest usage: ${response.statusCode}');
+      debugPrint(
+        '[BillingApiClient] Failed to fetch guest usage: ${response.statusCode}',
+      );
       return 0; // fallback to 0 if API fails, or throw? better to fail gracefully.
     }
   }
@@ -157,23 +167,26 @@ class BillingApiClient {
   Future<void> incrementGuestUsage(String deviceId) async {
     final uri = Uri.parse('$_baseUrl/guest/usage');
     final headers = {'Content-Type': 'application/json'};
-    final body = jsonEncode({
-      'device_id': deviceId,
-      'action': 'increment',
-    });
+    final body = jsonEncode({'device_id': deviceId, 'action': 'increment'});
 
-    debugPrint('[BillingApiClient] Incrementing guest usage for device: $deviceId');
+    debugPrint(
+      '[BillingApiClient] Incrementing guest usage for device: $deviceId',
+    );
 
-    final response = await _client.post(uri, headers: headers, body: body);
+    final response = await _client
+        .post(uri, headers: headers, body: body)
+        .timeout(_requestTimeout);
 
     if (response.statusCode != 200) {
-      debugPrint('[BillingApiClient] Failed to increment guest usage: ${response.statusCode}');
+      debugPrint(
+        '[BillingApiClient] Failed to increment guest usage: ${response.statusCode}',
+      );
     }
   }
 
   /// Delete account on the server.
-  Future<void> deleteAccount() async {
-    final idToken = _authService.idToken;
+  Future<void> deleteAccount({String? idToken}) async {
+    idToken ??= await _authService.getBestEffortIdToken();
     if (idToken == null || idToken.isEmpty) {
       throw Exception('ログインが必要です');
     }
@@ -182,20 +195,31 @@ class BillingApiClient {
     final headers = {
       'Content-Type': 'application/json',
       'Authorization': 'Bearer $idToken',
+      'x-mm-id-token': idToken, // Fallback for SigV4 issues
     };
 
     debugPrint('[BillingApiClient] Deleting account');
 
-    final response = await _client.post(uri, headers: headers);
+    final response = await _client
+        .post(
+          uri,
+          headers: headers,
+          body: jsonEncode({}), // Some gateways require a body for POST
+        )
+        .timeout(_requestTimeout);
 
-    if (response.statusCode != 200 && response.statusCode != 204) {
-      String errorMsg = 'アカウント削除に失敗しました';
+    if (response.statusCode != 200 &&
+        response.statusCode != 201 &&
+        response.statusCode != 204) {
+      String errorMsg = 'アカウント削除に失敗しました (Status: ${response.statusCode})';
       try {
         final bodyObj = jsonDecode(utf8.decode(response.bodyBytes));
         if (bodyObj is Map && bodyObj.containsKey('message')) {
           errorMsg = bodyObj['message'] as String;
         }
-      } catch (_) {}
+      } catch (_) {
+        errorMsg += ': ${response.body}';
+      }
       throw Exception(errorMsg);
     }
   }

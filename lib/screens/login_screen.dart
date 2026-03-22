@@ -24,17 +24,24 @@ class _LoginScreenState extends State<LoginScreen> {
   bool _obscurePassword = true;
   String? _errorMessage;
   StreamSubscription? _authSubscription;
+  bool _didNavigateToHome = false;
 
   @override
   void initState() {
     super.initState();
     _authSubscription = _authService.authStateChanges.listen((isAuthenticated) {
       if (isAuthenticated && mounted) {
-        Navigator.of(context).pushReplacement(
-          MaterialPageRoute(builder: (_) => const HomeScreen()),
-        );
+        _navigateToHome();
       }
     });
+  }
+
+  void _navigateToHome() {
+    if (_didNavigateToHome || !mounted) return;
+    _didNavigateToHome = true;
+    Navigator.of(
+      context,
+    ).pushReplacement(MaterialPageRoute(builder: (_) => const HomeScreen()));
   }
 
   @override
@@ -63,10 +70,11 @@ class _LoginScreenState extends State<LoginScreen> {
     setState(() => _isLoading = false);
 
     if (result.success) {
-      Navigator.of(context).pushReplacement(
-        MaterialPageRoute(builder: (_) => const HomeScreen()),
-      );
-    } else {
+      _navigateToHome();
+      return;
+    }
+
+    if (!result.success) {
       setState(() => _errorMessage = result.errorMessage);
     }
   }
@@ -83,10 +91,11 @@ class _LoginScreenState extends State<LoginScreen> {
     setState(() => _isLoading = false);
 
     if (result.success) {
-      Navigator.of(context).pushReplacement(
-        MaterialPageRoute(builder: (_) => const HomeScreen()),
-      );
-    } else {
+      _navigateToHome();
+      return;
+    }
+
+    if (!result.success) {
       setState(() => _errorMessage = result.errorMessage);
     }
   }
@@ -103,10 +112,11 @@ class _LoginScreenState extends State<LoginScreen> {
     setState(() => _isLoading = false);
 
     if (result.success) {
-      Navigator.of(context).pushReplacement(
-        MaterialPageRoute(builder: (_) => const HomeScreen()),
-      );
-    } else {
+      _navigateToHome();
+      return;
+    }
+
+    if (!result.success) {
       setState(() => _errorMessage = result.errorMessage);
     }
   }
@@ -221,7 +231,9 @@ class _LoginScreenState extends State<LoginScreen> {
                                     : Icons.visibility_off_outlined,
                               ),
                               onPressed: () {
-                                setState(() => _obscurePassword = !_obscurePassword);
+                                setState(
+                                  () => _obscurePassword = !_obscurePassword,
+                                );
                               },
                             ),
                             border: OutlineInputBorder(
@@ -256,7 +268,9 @@ class _LoginScreenState extends State<LoginScreen> {
                               );
                             },
                             style: TextButton.styleFrom(
-                              padding: const EdgeInsets.symmetric(horizontal: 4),
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 4,
+                              ),
                             ),
                             child: const Text(
                               'パスワードをお忘れの方',
@@ -274,12 +288,17 @@ class _LoginScreenState extends State<LoginScreen> {
                             decoration: BoxDecoration(
                               color: Colors.red.withAlpha(25),
                               borderRadius: BorderRadius.circular(8),
-                              border: Border.all(color: Colors.red.withAlpha(50)),
+                              border: Border.all(
+                                color: Colors.red.withAlpha(50),
+                              ),
                             ),
                             child: Row(
                               children: [
-                                const Icon(Icons.error_outline,
-                                    color: Colors.red, size: 20),
+                                const Icon(
+                                  Icons.error_outline,
+                                  color: Colors.red,
+                                  size: 20,
+                                ),
                                 const SizedBox(width: 8),
                                 Expanded(
                                   child: Text(
@@ -338,7 +357,9 @@ class _LoginScreenState extends State<LoginScreen> {
                       child: Text(
                         'または',
                         style: theme.textTheme.bodySmall?.copyWith(
-                          color: theme.textTheme.bodySmall?.color?.withAlpha(150),
+                          color: theme.textTheme.bodySmall?.color?.withAlpha(
+                            150,
+                          ),
                         ),
                       ),
                     ),
@@ -355,10 +376,17 @@ class _LoginScreenState extends State<LoginScreen> {
                     // Google Login
                     OutlinedButton.icon(
                       onPressed: _isLoading ? null : _handleGoogleLogin,
-                      icon: const FaIcon(FontAwesomeIcons.google, size: 20, color: Color(0xFF4285F4)),
+                      icon: const FaIcon(
+                        FontAwesomeIcons.google,
+                        size: 20,
+                        color: Color(0xFF4285F4),
+                      ),
                       label: const Text(
                         'Googleでログイン',
-                        style: TextStyle(fontSize: 15, fontWeight: FontWeight.w500),
+                        style: TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w500,
+                        ),
                       ),
                       style: OutlinedButton.styleFrom(
                         padding: const EdgeInsets.symmetric(vertical: 14),
@@ -374,7 +402,10 @@ class _LoginScreenState extends State<LoginScreen> {
                       icon: const FaIcon(FontAwesomeIcons.line, size: 20),
                       label: const Text(
                         'LINEでログイン',
-                        style: TextStyle(fontSize: 15, fontWeight: FontWeight.w500),
+                        style: TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w500,
+                        ),
                       ),
                       style: FilledButton.styleFrom(
                         backgroundColor: const Color(0xFF06C755),
@@ -394,14 +425,13 @@ class _LoginScreenState extends State<LoginScreen> {
                 Row(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    Text(
-                      'アカウントをお持ちでない方は',
-                      style: theme.textTheme.bodySmall,
-                    ),
+                    Text('アカウントをお持ちでない方は', style: theme.textTheme.bodySmall),
                     TextButton(
                       onPressed: () {
                         Navigator.of(context).push(
-                          MaterialPageRoute(builder: (_) => const RegisterScreen()),
+                          MaterialPageRoute(
+                            builder: (_) => const RegisterScreen(),
+                          ),
                         );
                       },
                       child: const Text('新規登録'),
